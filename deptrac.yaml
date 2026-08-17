@@ -1,0 +1,22 @@
+deptrac:
+  paths:
+    - ./src
+  layers:
+    - name: AiLib
+      collectors:
+        - type: classLike
+          value: AiToolset\\AiLib\\.*
+    - name: Cli
+      collectors:
+        - type: classLike
+          value: AiToolset\\Tm\\Cli\\.*
+    - name: Mcp
+      collectors:
+        - type: classLike
+          value: AiToolset\\Tm\\Mcp\\.*
+  ruleset:
+    AiLib: ~
+    Cli:
+      - AiLib
+    Mcp:
+      - AiLib

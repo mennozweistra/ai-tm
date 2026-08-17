@@ -1,0 +1,3 @@
+description = "Open-ended, non-coding ticket for research, discussion, or decisions with no fixed deliverable. Use when the work doesn't fit the phase/task shape of a feature template."
+ai_description = "No phases or tasks are pre-defined. Findings, decisions, and discussion get logged directly to the ticket via tm_log_add as the work progresses."
+phases = []

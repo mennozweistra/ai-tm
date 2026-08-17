@@ -1,0 +1,29 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+ini_set('display_errors', 'stderr');
+
+// Probe the two layouts this package ships in (ticket 269): a checkout, where this file
+// sits in bin/ next to a sibling vendor/, and a composer global vendor install, where
+// this package sits three levels below the consumer's vendor/ root.
+$autoload = null;
+foreach ([__DIR__ . '/../vendor/autoload.php', __DIR__ . '/../../../autoload.php'] as $candidate) {
+    if (is_file($candidate)) {
+        $autoload = $candidate;
+        break;
+    }
+}
+if ($autoload === null) {
+    fwrite(STDERR, "Could not find the Composer autoloader.\n");
+    exit(1);
+}
+require $autoload;
+
+date_default_timezone_set(IntlTimeZone::createDefault()->getID());
+
+use AiToolset\Tm\Mcp\McpServer;
+
+$server = new McpServer();
+$server->run();

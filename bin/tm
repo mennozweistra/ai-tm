@@ -1,0 +1,60 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+// Probe the two layouts this package ships in (ticket 269): a checkout, where this file
+// sits in bin/ next to a sibling vendor/, and a composer global vendor install, where
+// this package sits three levels below the consumer's vendor/ root.
+$autoload = null;
+foreach ([__DIR__ . '/../vendor/autoload.php', __DIR__ . '/../../../autoload.php'] as $candidate) {
+    if (is_file($candidate)) {
+        $autoload = $candidate;
+        break;
+    }
+}
+if ($autoload === null) {
+    fwrite(STDERR, "Could not find the Composer autoloader.\n");
+    exit(1);
+}
+require $autoload;
+
+date_default_timezone_set(IntlTimeZone::createDefault()->getID());
+
+use AiToolset\AiLib\Domain\Exception\SchemaAheadException;
+use AiToolset\Tm\Cli\Application;
+use AiToolset\Tm\Cli\Commands\InfoCommand;
+use Symfony\Component\Console\Application as ConsoleApplication;
+
+// `tm info` bypasses Cli\Application entirely (ticket 269, requirement 694).
+// Application's constructor unconditionally self-migrates the store before
+// opening it, which would create ~/.ai-tm and store.db on a machine that has
+// none — the opposite of what a read-only diagnostic command promises. This
+// checks the raw argv before any store is touched, so the info path never
+// runs the self-migration below.
+if (($argv[1] ?? null) === 'info') {
+    $infoApp = new ConsoleApplication('tm');
+    $infoApp->add(new InfoCommand((string) getenv('HOME'), getenv('TM_DB'), (string) getcwd()));
+    exit($infoApp->run());
+}
+
+// The constructor migrates the store before it opens it (ticket 269, requirement
+// 685). That runs before Symfony Console exists to render an error, so the one
+// thing that can fail there — a store written by a newer release, or an
+// unwritable data directory — is reported here in the same {ok,error} JSON shape
+// BaseCommand::handleError() uses, rather than as a PHP fatal.
+try {
+    $application = new Application();
+} catch (Throwable $e) {
+    fwrite(STDERR, json_encode([
+        'ok' => false,
+        'error' => [
+            'code' => $e instanceof SchemaAheadException ? 'schema_ahead' : 'internal',
+            'message' => $e->getMessage(),
+            'type' => $e::class,
+        ],
+    ], JSON_UNESCAPED_UNICODE) . "\n");
+    exit(1);
+}
+
+exit($application->run());

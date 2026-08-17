@@ -1,0 +1,218 @@
+description = "Lifecycle for small tickets that don't need heavy ceremony: a single grill interview for Discovery, a single planning task, a budgeted self-fixing QA phase, and one judge-only pass of AI Review."
+ai_description = "Work the phases in order; do not start a phase until the previous one is complete. Discovery gathers requirements via a single grill interview. Planning turns them into an implementation and release plan in one task. Implementation builds it. QA runs the budgeted mechanical checks (max_attempts=3), self-fixing inline. AI Review judges requirements traceability, functional behavior, and code quality once, judge-only. Human Review is the user's sign-off. Release ships it, gated on the user's explicit go-ahead for any shared-state step. See each phase for its own rules."
+
+[[phases]]
+name = "Discovery"
+description = "Work out what the feature must do, and capture it as requirement entities on the ticket. This phase runs before Planning: it produces the specification that Planning turns into work. The requirements it produces are displayed in the ticket's Requirements section, not inside this phase."
+ai_description = "Discovery is the requirements-gathering process. Its output is the ticket's requirement entities (the standing specification); the phase produces them but does not contain them, the same way Implementation produces code that lives in the repo. Run the tasks in this phase in order. Do not proceed to Planning until Discovery's questioning step has happened or the user has explicitly declined it. Do not start planning or implementation from inside this phase."
+order = 1
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Run a grill session to close the gaps"
+description = "The AI now asks questions, each with a recommended answer, to surface the decisions, edge cases, and boundaries the free-form conversation missed. Light questions, where the architecture or the code already points to one clear answer, come as one numbered batch: reply with the numbers you want to discuss and the rest are accepted. Questions whose answer genuinely shapes the design come one per turn. Requirements are added or sharpened as the answers come in."
+ai_description = "Call `tm_grill` with the ticket id and follow the protocol it returns. Do not improvise a question sequence from memory — the protocol is the only correct entry point for this interview. The tool will guide you through reading the ticket, exploring the codebase in a sub-agent, conducting the interview in two gears — light questions in one numbered batch the user can accept or pick from, heavy questions one per turn, each with a recommended answer — storing every question as a question entity the moment it is presented and resolving it in the same turn the user answers, and writing requirements live as alignment is reached. The interview closes once requirements are settled."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "sonnet"
+
+[[phases]]
+name = "Setup"
+description = "Set up the workspace for this ticket, so Implementation has a git worktree ready for each repository it touches."
+ai_description = "Create the per-ticket workspace before Implementation begins — the detail on how is in this phase's task. Do not delete or clean up the ticket directory once created; it persists for later reference."
+order = 2
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Create the ticket workspace and worktrees"
+description = "Update main, create the ticket directory at <project directory>/tickets/<id>-<slug>/, and add a git worktree there for each repo the ticket touches, each on a new branch for the ticket."
+ai_description = "Update the main checkout to the latest main (pull) for each repo the ticket touches. Create the ticket directory at <project path>/tickets/<id>-<slug>/ (project path is the project's root). For each repo the ticket touches, run git worktree add into that directory on a new branch named ticket-<id>-<slug>, and confirm the worktree is on that branch.\n\nBefore finishing, double-check the already-identified list of touched repos against each touched repo's own composer.json (\"repositories\" entries of \"type\": \"path\") or package.json (workspace/\"file:\" dependencies): if any of those local dependency repos is missing from that list, create a worktree for it too, on the same ticket branch, rather than leaving it to be discovered later and worked around. This is a backstop in case the touched-repo determination missed a build dependency.\n\nPlace any uncommitted workspace files the ticket needs (notes, a brief, a docker compose override) at the top of the ticket directory, above the worktrees, so they stay outside every repo. Do not clean up afterward — the ticket directory persists."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "sonnet"
+
+[[phases]]
+name = "Planning"
+description = "Turn the requirements into an implementation plan and a release plan, and decide which repositories this ticket touches. You may rename the Implementation phase, and you may insert extra phases — but only between Planning and QA."
+ai_description = "Produce the Implementation-phase task breakdown and the Release-phase plan, and decide which repositories the ticket touches — the detail on how is in this phase's planning task. Run the tasks in this phase in order; a review task may send the plan back to an earlier task for revision. You may rename the Implementation phase to something feature-specific and you may add extra phases, but any added phase goes after Planning and before QA. Do not proceed to Setup until Planning is complete."
+order = 3
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Plan the implementation and release"
+description = "Read the requirements and the project's architecture, then create the Implementation tasks and the Release tasks, each naming the requirement it serves where applicable. Decide which repositories the ticket touches — a repository is touched if the ticket edits files in it, or if it is a local path/workspace dependency (for example a composer.json \"type\": \"path\" entry, or an npm workspace/file: dependency) of a repository being edited, since that dependency needs its own worktree too even though its source is never edited directly. The Release tasks are chosen to fit this project (for example tag and publish, push to a remote, or deploy)."
+ai_description = "Inputs: the ticket's feature description and the requirement entities on the ticket. Read the project's architecture document under docs/ first — the plan must fit it; if it can't, store it as an 'ask' question via tm_question_add the moment it arises (kind 'ask', the ticket id, this task's id as `task`, the model you are running as `model`, a cold-reader question in plain words with your recommended resolution in `recommendation`) instead of planning around it. Create each Implementation-phase task with a clear name, a description of the work, and a reference to its source requirement in the description (or \"from the feature description\" if there were no formal requirements). Break the work down for a good implementation, not to mirror the requirement count — split large requirements into several tasks, group trivial ones.\n\nInclude, among the Implementation tasks, a task that creates or updates any documentation the feature changes — the architecture document, README, API docs, and any other docs referenced by the project's AGENTS.md. This covers both editing an existing doc to reflect a change and writing a new doc or section when the feature introduces something with no existing coverage. Place it as the last Implementation task, since it needs to see the complete diff to know what changed. This is not optional busywork: a later QA check will fail the ticket if a documented surface changed without a matching doc update, so an omitted or incomplete documentation task here comes back to Implementation anyway — plan it in up front instead.\n\nIdentify which repositories the ticket touches, for the Setup phase to create a worktree for each. A repository is touched if (a) the ticket edits files in it, or (b) it is a local path/workspace dependency of a repository being edited — check the composer.json (\"repositories\" entries of \"type\": \"path\") or package.json (workspace/\"file:\" dependencies) of every repository from (a) and include any such dependency repos even though the ticket never edits their source directly. In this toolset, ai-tm and ai-dashboard both depend on ai-lib this way, so touching either always means ai-lib needs its own worktree too.\n\nAlso create the Release-phase tasks the same way, choosing the steps that fit this project (for example tag and publish, push to a remote, or deploy), and leave any shared-state step (merge to main, publish, deploy to production) gated on the user's explicit go-ahead.\n\nWhen creating each Implementation task, also set its `model` field: pick the cheapest model capable of doing the task well, judged from that task's own name and description. Use `haiku` for simple, mechanical steps (renames, formatting, single-line config edits, running an existing scripted check). Use `sonnet` for typical implementation or review work needing ordinary engineering judgment — most tasks land here. Use `opus` only where the task's own difficulty genuinely needs it (deep architectural reasoning, ambiguous requirements needing careful synthesis, a step likely to need retries). Pass the picked value as the `model` argument to `tm_task_add` when creating the task, so it does not fall through to grind's own null-model fallback at execution time.\n\nRecord the plan's shape and any decisions in this task's result; put any architectural decision in the architecture document too.\n\nSlice the tasks so the tests come before the code that satisfies them. Either a task writes its failing tests first and then makes them pass, or one task writes the failing tests and the next makes them green — the second shape is stronger, because the agent that wrote the test is not the one grading its own code. Never plan a task that writes code first and tests afterwards; a test written after the fact agrees with whatever the code does, bugs included.\n"
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "opus"
+
+[[phases]]
+name = "Implementation"
+description = "Do the work. The tasks here were created by the Planning phase; each names the requirement it serves. Build on a feature branch, follow the project's architecture document, keep the code consistent with what's already there. This phase ships empty in the template — Planning fills it."
+ai_description = "Implement the tasks in this phase, in order. Each task names its source requirement — build exactly what that requires, no more. Follow the project's architecture document under docs/; if you hit a situation the architecture doesn't cover, stop and raise it with the user rather than inventing a pattern. Write tests alongside the code per the project's testing conventions. Work on a feature branch. Record what you did, and any decisions taken along the way, in each task's result. If the plan turns out to be wrong, return to Planning rather than improvising. This phase is empty until Planning populates it."
+order = 4
+max_attempts = 0
+tasks = []
+
+[[phases]]
+name = "QA"
+description = "The budgeted, self-fixing mechanical check-phase: static analysis, code style, the test suite, the architecture check, the refactor check, the documentation check, and the pre-merge checklist — one concern per task so a failure is individually visible, skipped where the underlying tool is not configured. AI Review and Human Review follow, for checks that must never self-fix."
+ai_description = "Run the mechanical checks in this phase, in order. Every task's own max_attempts is 0 — the phase itself carries the retry budget (max_attempts = 3, req 296): a failing check is fixed inline and the phase re-runs its full pass until every check is clean or the phase's attempts are spent. Never lower a gate or weaken a test to make a check pass. When a check fixes an issue inline and the fix involved a real choice between reasonable options, record that decision as a 'check' question via tm_question_add — the question states what was hit, and the recommendation is the decision taken — so the user can later confirm it or reverse it. An issue whose only sound fix would create a new requirement or an architecture change is not fixed here: store it as an 'ask' question via tm_question_add and stop, since that call is the user's. Pass the ticket id, the check task's id as `task`, and the model you are running as `model` on every question, and write each self-contained for a cold reader in plain words. This phase does not judge requirements traceability or run any review — those moved to AI Review, which runs once, judge-only, and never self-fixes."
+order = 5
+max_attempts = 3
+
+[[phases.tasks]]
+name = "Static analysis"
+description = "Run the project's static analysis, if one is configured. The task fails if it reports any error; it is skipped if the project has no static analyzer configured."
+ai_description = "Check whether the project defines a static-analysis tool (for a typical PHP project, a phpstan.neon / phpstan.dist.neon config, or a `stan`/`phpstan` script in composer.json). If none is configured, set this task's status to \"skipped\" via tm_task_set with a one-line reason in result explaining what's missing, and stop — this is an acceptable outcome, not a failure. If a tool is configured, run it (for a typical PHP project, `composer stan` or `vendor/bin/phpstan analyse`). Any reported error fails the task — record it and stop, do not attempt the fix here. Do not raise the baseline or lower the level to make it pass."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "haiku"
+
+[[phases.tasks]]
+name = "Code style"
+description = "Check code style, if a code-style tool is configured; fix and re-run until clean. Skipped if the project has none configured."
+ai_description = "Check whether the project defines a code-style tool (for a typical PHP project, a .php-cs-fixer.php / .php-cs-fixer.dist.php config). If none is configured, set this task's status to \"skipped\" via tm_task_set with a one-line reason in result, and stop — this is an acceptable outcome, not a failure. If configured, run the style check in dry-run mode (for a typical PHP project, `vendor/bin/php-cs-fixer fix --dry-run --diff`). Apply the fixes it wants, then re-run until it reports no changes. Then the task is done."
+actor = "agent"
+max_attempts = 0
+order = 2
+model = "haiku"
+
+[[phases.tasks]]
+name = "Test suite"
+description = "Run the full test suite, if one is configured. The task fails on any failing or skipped test; it is skipped if the project has no test suite configured."
+ai_description = "Check whether the project has a test suite configured (for a typical PHP project, a phpunit.xml / phpunit.xml.dist or Pest config, or a `test` script in composer.json). If none is configured, set this task's status to \"skipped\" via tm_task_set with a one-line reason in result, and stop — this is an acceptable outcome, not a failure. If configured, run the project's test command (for a typical PHP project, `composer test`, Pest or PHPUnit). A failing, skipped, or incomplete test fails the task — record it and stop, do not attempt the fix here. Do not delete or weaken a test to make it pass."
+actor = "agent"
+max_attempts = 0
+order = 3
+model = "haiku"
+
+[[phases.tasks]]
+name = "Architecture check"
+description = "Run the project's architecture/dependency-boundary analysis, if one is configured. The task fails if it reports any violation; it is skipped if the project has none configured."
+ai_description = "Check whether the project defines an architecture-boundary tool (for a typical PHP project using Deptrac, a deptrac.yaml config). If none is configured, set this task's status to \"skipped\" via tm_task_set with a one-line reason in result, and stop — this is an acceptable outcome, not a failure. If configured, run it (for a typical PHP project, `composer deptrac` or `vendor/bin/deptrac analyse`). Any reported violation fails the task — record it and stop, do not attempt the fix here. Do not loosen the ruleset or add a suppression to make it pass."
+actor = "agent"
+max_attempts = 0
+order = 4
+model = "haiku"
+
+[[phases.tasks]]
+name = "Refactor check"
+description = "Check for automated refactor/modernization suggestions, if a tool is configured; apply and re-run until clean. Skipped if the project has none configured."
+ai_description = "Check whether the project defines a refactor-suggestion tool (for a typical PHP project using Rector, a rector.php config). If none is configured, set this task's status to \"skipped\" via tm_task_set with a one-line reason in result, and stop — this is an acceptable outcome, not a failure. If configured, run it in dry-run mode (for a typical PHP project, `vendor/bin/rector process --dry-run`). Apply the suggested changes, then re-run until it reports no changes. Then the task is done."
+actor = "agent"
+max_attempts = 0
+order = 5
+model = "haiku"
+
+[[phases.tasks]]
+name = "Documentation check"
+description = "Confirm the documentation this ticket should have updated was actually updated, by comparing the diff against the docs."
+ai_description = "Read the ticket's full diff (all commits since the branch diverged from main). For each change that alters documented behavior — a route or query parameter added/renamed/removed, a public API shape, a CSS class or design-system catalogue entry, an architectural decision, a feature added or removed, a config option — confirm the matching documentation was updated in the same set of commits: the project's architecture document, README, API docs, and any other docs referenced by the project's AGENTS.md. Put the change-to-documentation mapping in this task's result, one line per changed surface, citing the doc file and section that covers it. Any undocumented change fails the task — record it and stop; do not write the missing documentation yourself here, this is a verification-only task."
+actor = "agent"
+max_attempts = 0
+order = 6
+model = "sonnet"
+
+[[phases.tasks]]
+name = "Pre-merge checklist"
+description = "Work through docs/pre-merge-checklist.md item by item, if the project has one. Skipped if it does not."
+ai_description = "Check whether the project has a pre-merge checklist (docs/pre-merge-checklist.md). If it does not exist, set this task's status to \"skipped\" via tm_task_set with a one-line reason in result, and stop — this is an acceptable outcome, not a failure. If it exists, open it, go through every item, do what it says, and record each result. Where the checklist references rules from the architecture document, check against those too. Any failed item fails the task."
+actor = "agent"
+max_attempts = 0
+order = 7
+model = "sonnet"
+
+[[phases.tasks]]
+name = "Ponytail review"
+description = "Review the ticket's diff for over-engineering — unneeded abstractions, dependencies, or code that reinvents something the standard library or an existing dependency already does."
+ai_description = "Run the /ponytail-review skill against the ticket's diff (all commits since the branch diverged from main, across every repo the ticket touched). It hunts only complexity, not correctness: reinvented standard library, unneeded dependencies, speculative abstractions, dead flexibility. For a clear-cut finding (a one-line stdlib swap, an unused parameter, a genuinely dead abstraction), apply the fix directly and re-run until clean. For a finding that is a real judgment call — the simplification might change intended behavior, or trades off against a stated requirement — do not force it: record it as a \"check\" question instead and leave the code as is. Zero findings, or only judgment-call findings recorded as questions, both count as clean."
+actor = "agent"
+max_attempts = 0
+order = 8
+model = "sonnet"
+
+[[phases]]
+name = "AI Review"
+description = "AI-driven review, judge-only: each task runs once and never self-fixes. A requirement set to unmet, or a review finding, is recorded and left for a human — it does not loop back through this phase."
+ai_description = "Run these tasks in order, once each (max_attempts = 0 on the phase and every task, req 305). Never attempt a fix here, even a small one — repairing a not-met requirement can mean real implementation work, so any fix goes back through Implementation and the pipeline re-runs from QA. Verify requirements traceability first, then the functional review, then the code review.\n\nRoute every finding — 'minor, ignore' is not a disposition. A small finding: stay judge-only (do not fix it here, not even a small fix) and record it as a 'check' question via tm_question_add stating the finding and the intended fix, and saying that the fix task is created only after the run, when the question is processed, and then loops back through Implementation via the traceable-fix path — promise nothing done during the run, since the grind coordinator may not create tasks mid-run. A finding that needs the user's call (for example: fix it before Human Review, or accept the risk): an 'ask' question laying out the options. A finding too big for this ticket: an 'ask' question proposing a new ticket, since a ticket is never created silently. Pass the ticket id, the review task's id as `task`, and the model you are running as `model` on every question, and write each self-contained for a cold reader with your recommendation. A requirement you set to 'unmet' is such a finding — route it the same way."
+order = 6
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Requirements traceability"
+description = "Confirm every requirement entity on the ticket is met by the built code."
+ai_description = "For each requirement entity on the ticket, find the code and tests that satisfy it and confirm it is actually met. Put the requirement-to-code mapping in this task's result. For each requirement, call mcp__tm__tm_requirement_set with the requirement's id and verification set to \"met\" if the code fully satisfies it, \"unmet\" if it does not, or leave it \"unverified\" only if you genuinely cannot determine the outcome (rare — explain why in the result if this happens). Do this for every requirement before finishing, not just the ones that fail. Any requirement you set to \"unmet\" fails this task — record it and stop, do not attempt the fix here."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "sonnet"
+
+[[phases.tasks]]
+name = "AI functional review"
+description = "Run the feature and verify it actually works against the requirements: drive the user interface in a real browser and exercise the API endpoints, confirming each requested behaviour functions end to end. Findings go in the result; a functional failure means recording it and stopping here."
+ai_description = "Start the application with the project's run/dev command. Exercise the feature end to end against the requirements: drive the user interface in a real browser with Playwright, and call the REST endpoints directly where the feature exposes them. Confirm each requested behaviour actually works when run — not merely that the tests pass. Record what you exercised and the per-requirement outcome in this task's result; a functional failure means recording it and stopping here, not attempting the fix. Leave the application running when you finish. Performed by a clean Claude Code agent now; designed to be delegated later to another AI with browser control."
+actor = "agent"
+max_attempts = 0
+order = 2
+model = "sonnet"
+
+[[phases.tasks]]
+name = "AI code review"
+description = "A fresh-context AI reviews all of this ticket's code changes against the architecture, conventions, and requirements, and reports findings by severity. No fixes are made here — a confirmed issue is recorded and the task stops."
+ai_description = "Run a clean-context code review over the complete set of changes made for this ticket (the diff of its commits against the base branch). Read AGENTS.md, CLAUDE.md, and docs/architecture.md first. Review what the mechanical QA tasks cannot: correctness and subtle bugs, adherence to the documented architecture and conventions, readability, maintainability, and test quality. Write the findings grouped by severity into this task's result. Do not fix anything — record a confirmed issue and stop here, not attempting the fix. For now this is performed by a clean Claude Code agent (for example the /code-review command or a dedicated review subagent); it is designed to be delegated later to an external AI reviewer such as CodeRabbit."
+actor = "agent"
+max_attempts = 0
+order = 3
+model = "sonnet"
+
+[[phases]]
+name = "Human Review"
+description = "The user's manual sign-off: confirms the feature works as intended and reviews the code. These tasks are for the user — the AI does not complete them."
+ai_description = "Leave both tasks in this phase for the user. Do not mark either done on their behalf; wait for the user's own confirmation."
+order = 7
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Human functional review"
+description = "The user runs the feature and confirms it does what was requested and feels right. This task is for the user — the AI does not complete it."
+ai_description = "Do not mark this task done — it is the user's hands-on check that the feature works and matches intent. For a user interface the user opens it in a browser; for an API the user exercises the endpoints. The application should already be running from an earlier check. Leave this task for the user."
+actor = "human"
+max_attempts = 0
+order = 1
+
+[[phases.tasks]]
+name = "Human code review"
+description = "The user reviews the implemented code. This task is for the user — the AI does not complete it."
+ai_description = "Do not mark this task done — it is the user's review of the code. Leave it for the user."
+actor = "human"
+max_attempts = 0
+order = 2
+
+[[phases]]
+name = "Release"
+description = "Get the finished, reviewed feature out. This phase starts empty; its tasks are planned during Planning to fit the project — for example tag and publish a library, push a local tool to its remote, or deploy a web app to production. Merging to the main branch and any production deployment are the user's calls."
+ai_description = "Perform the release tasks that were planned during Planning, in order. Steps that change shared state — merging to the main branch, publishing, deploying to production — are never unprompted; do them only on the user's explicit go-ahead. Documentation updates happen earlier, as the last Implementation task, and are checked in QA before this phase runs — nothing to do here for docs."
+order = 8
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Merge to main and push"
+description = "Merge the feature branch into main and push main to the remote. This is a shared-state action — only after the user's explicit go-ahead naming this step, never unprompted."
+ai_description = "For each repo the ticket touched with real commits on its feature branch: update the main checkout to the latest main (git pull --ff-only), merge the feature branch into main with a real merge commit (git merge --no-ff, not a rebase or squash, so the ticket's individual commits stay visible in history), and push main to origin. A repo whose worktree was created but never received a commit (a build dependency touched read-only) needs no merge. Do this only after the user gives explicit go-ahead naming this step or the release itself — never automatically, even if earlier steps completed without objection."
+actor = "human"
+max_attempts = 0
+order = 1
+
+[[phases.tasks]]
+name = "Verify the merge and close the ticket"
+description = "Confirm the earlier merge task actually landed on main before this ticket is allowed to close."
+ai_description = "For every repo this ticket has a worktree for: check whether the ticket's branch has any commits (git log <branch> vs its base). A worktree created but never committed to needs no check — skip it. For every repo with real commits, verify main actually contains them: `git rev-list --count main..<branch>` must be 0 (every commit on the branch is already in main), not just that the earlier 'Merge to main and push' task was marked done — a task can be marked done by mistake without the merge having happened. If a remote exists, also confirm main is not ahead of its pushed state (`git rev-list --count origin/main..main` is 0). If any repo fails either check, do not mark this task done: report FAILED, name the exact repo and branch that is not merged or not pushed, and stop — the ticket must not close until a human completes the actual merge. Only when every touched repo passes does this task close, and with it the ticket."
+actor = "agent"
+max_attempts = 0
+order = 2
+model = "haiku"
