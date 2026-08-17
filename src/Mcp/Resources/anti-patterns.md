@@ -10,6 +10,14 @@ Concrete mistakes agents make when first using `tm`. Each entry names the mistak
 
 **Do instead:** pass `name` on creation; capture the integer `id` from the response and use it for every subsequent call. If you need to record an external reference (for example a JIRA id), put it in `name` or `description`.
 
+## Setting a phase or ticket status by hand
+
+**Mistake:** calling `tm_phase_set` or `tm_ticket_set` with a `status` — flipping a phase to `active` when starting its first task, or a ticket to `done` after closing its last one. A second form of the same mistake: telling the user that a phase or a ticket "still reads failed" and asking whether he wants it changed.
+
+**Why it is wrong:** phase, ticket, and project statuses are derived from their children, not stored decisions. The data plane recomputes them on every task and phase status change, taking the highest-priority status present: `active` > `blocked` > `failed` > `review` > `pending` > `done` > `skipped`. A hand-set value lasts until the next child changes, and a report about a stale parent status wastes the user's attention on a value that has already been recomputed.
+
+**Do instead:** set task statuses only. When you need a parent's status, read it back with `tm_phase_show` or `tm_ticket_show` after the child change. See "Parent statuses are derived, never set" in `tm://workflow`.
+
 ## Skipping phases
 
 **Mistake:** creating a ticket and adding tasks directly to it, expecting `tm` to auto-create a default phase or accept tasks without a phase id.

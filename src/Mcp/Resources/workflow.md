@@ -14,7 +14,22 @@ A normal turn for an agent working in a project that uses `tm` looks like this:
 
 ## No workflow rules
 
-`tm` enforces no workflow rules of its own. Every status transition between valid statuses is allowed, on tasks and on every other level. Phase ordering, ticket transitions, the auto-derivation of parent statuses from children — all of that is the data plane's responsibility, not `tm`'s.
+`tm` enforces no workflow rules of its own. Every status transition between valid statuses is allowed, on tasks and on every other level. Phase ordering and which transition makes sense next are the caller's business, not `tm`'s.
+
+## Parent statuses are derived, never set
+
+Set the status of tasks. Never set the status of a phase, a ticket, or a project. The data plane recomputes those from their children on every task and phase status change, so a hand-set value survives only until the next change and misleads whoever reads it in between.
+
+The derivation takes the highest-priority status present among the children, in this order:
+
+`active` > `blocked` > `failed` > `review` > `pending` > `done` > `skipped`
+
+A phase derives from its tasks, a ticket from its phases, a project from its tickets. What follows from that:
+
+- One `failed` task makes its phase and its ticket read `failed`. Closing that task is the only way to clear them.
+- A phase that still holds one `pending` task reads `pending`, however many of its tasks are `done`. A ticket reads `done` only when every task under it is `done` or `skipped`.
+- Never tell the user that a phase or a ticket "still has to be set" to something. Read the parent back instead — the recompute has already run.
+- The derivation runs only while the project's `auto_status` flag is on, which is its default.
 
 ## Planning conventions
 
