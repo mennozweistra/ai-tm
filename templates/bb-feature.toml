@@ -1,0 +1,418 @@
+description = "Basebuilder feature template covering the full delivery lifecycle across the multi-repo stack: discovery, planning, workspace setup, implementation, quality assurance, AI review, human review, and release. Use this for any Basebuilder feature whose requirements are gathered on the ticket before development begins. It fits the multi-repo workflow: Planning decides which repositories the ticket touches, Setup creates a git worktree for each, and the bb-specific quality tooling (bb-quality-fix, bb-quality-check, bb-phpunit) and external reviews (Gemini, CodeRabbit) run in QA and AI Review. Merging to master and any production deployment are the user's calls."
+ai_description = "Work the phases in order; do not start a phase until the previous one is complete. Discovery gathers requirements as requirement entities on the ticket. Planning turns them into an implementation and release plan and decides which repositories the ticket touches. Setup creates a git worktree for each touched repo (interactive prep done before any grind run, since worktree creation needs a git push that a grind helper cannot do). Implementation builds it. QA runs the budgeted mechanical checks (bb-quality-fix/bb-quality-check, bb-phpunit), self-fixing inline, then the Ponytail over-engineering review, and ends with the pre-merge checklist so that checklist judges the code that will actually be merged. AI Review then judges requirements traceability, runs the functional review, runs our own AI code review — the one task whose job is hunting correctness bugs by reading the diff — and then the Gemini and CodeRabbit code reviews, once each. Human Review is the user's and colleagues' sign-off. Release ships it, gated on the user's explicit go-ahead for any shared-state step (merge to master, deploy to production). See each phase for its own rules."
+
+[[phases]]
+name = "Discovery"
+description = "Work out what the feature must do, and capture it as requirement entities on the ticket. This phase runs before Planning: it produces the specification that Planning turns into work. The requirements it produces are displayed in the ticket's Requirements section, not inside this phase."
+ai_description = "Discovery is the requirements-gathering process. Its output is the ticket's requirement entities (the standing specification); the phase produces them but does not contain them, the same way Implementation produces code that lives in the repo. Run the tasks in this phase in order. Do not proceed to Planning until Discovery's questioning step has happened or the user has explicitly declined it. Do not start planning or implementation from inside this phase."
+order = 1
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Brainstorm and capture the requirements"
+description = "Talk through what the feature should do. This is the open, human-led part — you lead the conversation, the AI listens and sharpens. As each requirement becomes clear, it is captured as a requirement entity on the ticket."
+ai_description = "This is the human-led, free-form half of gathering requirements. The user drives an open conversation about what the feature must do; your job is to listen, reflect back, sharpen, and capture each requirement that emerges as a requirement entity on the ticket via tm_requirement_add. Write each requirement as a discrete, individually verifiable statement. Do not start planning or implementation. Do not rush ahead — capture, do not build.\n\nBB reminder: if a requirement involves an interactive control (toggle, drag, custom click/touch/pointer handler), capture touch-input parity (\"identical behaviour on touch input as on mouse\") as its own explicit, individually verifiable requirement line — do not leave it implied by the general behaviour requirement (BBDEV-2320: a fix verified only on mouse shipped broken on touch)."
+actor = "human"
+max_attempts = 0
+order = 1
+
+[[phases.tasks]]
+name = "Run a grill session to close the gaps"
+description = "The AI now asks questions, each with a recommended answer, to surface the decisions, edge cases, and boundaries the free-form conversation missed. Light questions, where the architecture or the code already points to one clear answer, come as one numbered batch: reply with the numbers you want to discuss and the rest are accepted. Questions whose answer genuinely shapes the design come one per turn. Requirements are added or sharpened as the answers come in."
+ai_description = "Call `tm_grill` with the ticket id and follow the protocol it returns. Do not improvise a question sequence from memory — the protocol is the only correct entry point for this interview. The tool will guide you through reading the ticket, exploring the codebase in a sub-agent, conducting the interview in two gears — light questions in one numbered batch the user can accept or pick from, heavy questions one per turn, each with a recommended answer — storing every question as a question entity the moment it is presented and resolving it in the same turn the user answers, and writing requirements live as alignment is reached. The interview closes once requirements are settled."
+actor = "agent"
+max_attempts = 0
+order = 2
+model = "sonnet"
+
+[[phases.tasks]]
+name = "Devil's Advocate review"
+description = "Review the requirements captured on the ticket for gaps, contradictions, or ambiguity. Deliberately consider alternative interpretations or scope boundaries that were not considered. For each gap or ambiguity found, evaluate how it should be resolved. If a requirement needs sharpening or a gap needs filling, update the requirements and repeat this review. Continue until the requirements are settled and defensible. Flag any unresolved trade-offs or genuinely ambiguous decisions for the human to decide."
+ai_description = "Run this review in a fresh sub-agent, not in the current context — instruct it to fetch the requirements captured so far itself via tm_requirement_list (and the ticket via tm_ticket_show for context) rather than passing them as a chat dump, so its critique is not biased by the reasoning that produced them. Have it challenge the requirements: what gaps, contradictions, or ambiguities remain? Are there alternative interpretations of scope that were not considered? For each issue it identifies, it should write a short comparison of the alternatives. If it concludes a requirement needs sharpening or a gap needs filling, update the requirements accordingly via tm_requirement_add / tm_requirement_set and run this review again. Stop when you are confident the requirements are settled and defensible.\n\nDo not write the findings to a markdown file. Return the full reasoning narrative — the gaps and ambiguities considered, the comparisons, and the reasoning for the final verdict — as this task's summary, so it is stored in the task's ai_result field and stays searchable in the database; keep the first line a concise summary for the result field. Every unresolved trade-off or genuinely ambiguous decision the review flags for the human — one it cannot settle itself by sharpening the requirements — is stored as a question entity via tm_question_add the moment it arises: kind 'ask', the ticket id, this task's id as `task`, and the model you are running as `model`. Write it self-contained for a cold reader who was not in this review — in plain words, saying when the issue comes up and how it unfolds, inventing no shorthand for things the user never named — and put the resolution you recommend and its reason in `recommendation`. Do not leave such a decision only in the summary or in chat, and do not defer writing it.\n\nBeyond the review and findings work described above, this task also states the assumptions its critique rests on, so the separate verifier task that follows can check them cold. As the sub-agent reasons, it surfaces every assumption its critique depends on — each thing it takes to be true that the ticket does not itself state — and records one log entry per assumption via tm_log_add with type \"assumption\" and task set to THIS task's own id (task-scoped, not ticket- or phase-scoped). It records every assumption, including ones it believes hold, and it does NOT check them itself: the following verifier task checks them cold, because the agent that stated an assumption is the one least able to see that it is false.\n\nEach assumption is one log entry. Its title is the assumption in one line. Its ai_content is prose following this fixed skeleton, in order: the assumption stated verbatim; its kind — \"fact\" (settled by something already in the repository: code, documentation, data, or a requirement already on the ticket) or \"intent\" (settled only by the user, on a point the requirements never specified); what would settle it (a file path, a document, a requirement id, or \"the user\"); the verdict, left as \"unchecked\" here for the verifier to reach; the evidence, if any is already at hand; the repair made, which is none at this stage; who registered it (this sub-agent and the model it ran as); and the pass number, which is 0 for this Devil's Advocate pass."
+actor = "agent"
+max_attempts = 3
+order = 3
+model = "opus"
+
+[[phases.tasks]]
+name = "Verify the review's assumptions"
+description = "Check the assumptions the preceding Devil's Advocate task recorded. A fresh agent reads each assumption cold from the log, classifies it as a fact (settled by the repository) or the user's intent (settled only by the user), checks and repairs the fact assumptions that do not hold, and stops the ticket for the user on any intent assumption. Every verdict is written back as a log entry. Bounded by the task's retry budget."
+ai_description = "Run this in a fresh sub-agent. Its job is to check, cold, the assumptions the preceding Devil's Advocate task stated — the agent that stated an assumption is the one least able to see it is false, so a separate agent checks them.\n\nFind the Devil's Advocate task by POSITION, never by name: it is the task immediately preceding this one in this same phase. Task names are template-defined and renamable, so name-matching is fragile — use tm_task_list on this phase and take the task one order position before this one. In this Discovery phase the order is brainstorm, grill, Devil's Advocate, this verifier, so the task immediately before this one is the Devil's Advocate review.\n\nRead the assumption log entries with tm_log_list: read the preceding Devil's Advocate task's entries (task-scoped to that task) and this task's own entries — a previous pass of this verifier may have added some (see the repair rule below). Consider only entries of type \"assumption\". Where more than one entry exists for the same assumption because passes have appended entries, treat the latest entry for that assumption as the current one.\n\nClassify each assumption as one of two kinds:\n- \"fact\" — settled by something already in the repository: code, documentation, data, or a requirement already on the ticket. You check this kind yourself.\n- \"intent\" — settled only by the user, on a point the requirements never specified. You never verify this kind by reasoning and never quietly accept it.\nThe same sentence can be either: a claim already written as a requirement on the ticket is a fact you confirm; the identical sentence stated only as an assumption, that nobody specified, is a guess at the user's intent.\n\nFor each fact assumption, check it yourself against the repository and repair what does not hold. In this Discovery phase the repair is to the requirements: fix them via tm_requirement_add / tm_requirement_set. When a repair rests on a new assumption of your own, write that new assumption as a new \"assumption\" log entry on THIS task (task set to this task's own id), so the next pass — a fresh sub-agent that remembers nothing of this one — checks it cold.\n\nNever guess an intent assumption. The moment you find one, this task fails: make no repair for it, stop, and write this task's result summary beginning with the token FAILED: (the token grind reads), naming the assumption and the exact question the user must answer to settle it. grind then halts the ticket and the user answers. This rule applies here in Discovery exactly as it does in Planning.\n\nRecord every verdict, not only the failures. For each assumption you reach a verdict on, write an \"assumption\" log entry on THIS task with the fixed skeleton below — both the assumptions that held and the ones that did not — so a later cross-ticket analyzer has a baseline as well as the falsified ones.\n\nWrite no markdown findings file. Your findings live only in the assumption log entries and in this task's result field; a second copy in a file would drift from the log.\n\nEach assumption log entry has title = the assumption in one line, type = \"assumption\", task = this task's own id, and ai_content written as prose following this fixed skeleton, in order: the assumption stated verbatim; its kind (\"fact\" or \"intent\"); what would settle it (a file path, a document, a requirement id, or \"the user\"); the verdict (\"verified\", \"falsified\", or \"needs-user\"); the evidence for that verdict; the repair made, if any; who registered it (this sub-agent and the model it ran as); and the pass number.\n\nThis is a self-contained budgeted task. grind's protocol re-runs it under its max_attempts budget — a fresh sub-agent judging cold each pass — until a pass finds nothing false and adds no new assumption, or the budget is spent, then reports. Do not implement any loop yourself: state this pass's verdicts and repairs and stop."
+actor = "agent"
+max_attempts = 3
+order = 4
+model = "opus"
+
+[[phases]]
+name = "Planning"
+description = "Turn the requirements into an implementation plan and a release plan, and decide which repositories this ticket touches. You may rename the Implementation phase, and you may insert extra phases — but only between Planning and QA."
+ai_description = "Produce the Implementation-phase task breakdown and the Release-phase plan, and decide which repositories the ticket touches — the detail on how is in this phase's planning task. Run the tasks in this phase in order; a review task may send the plan back to an earlier task for revision. You may rename the Implementation phase to something feature-specific and you may add extra phases, but any added phase goes after Planning and before QA. Do not proceed to Setup until Planning is complete."
+order = 2
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Plan the implementation and release"
+description = "Read the requirements and the project's architecture, then create the Implementation tasks and the Release tasks, each naming the requirement it serves where applicable. Decide which repositories the ticket touches — a repository is touched if the ticket edits files in it, or if it is a local path/workspace dependency (for example a composer.json \"type\": \"path\" entry, or an npm workspace/file: dependency) of a repository being edited, since that dependency needs its own worktree too even though its source is never edited directly. The Release tasks are chosen to fit this project (for example tag and publish, push to a remote, or deploy)."
+ai_description = "Inputs: the ticket's feature description and the requirement entities on the ticket. Read the project's architecture document under docs/ first — the plan must fit it; if it can't, store it as an 'ask' question via tm_question_add the moment it arises (kind 'ask', the ticket id, this task's id as `task`, the model you are running as `model`, a cold-reader question in plain words with your recommended resolution in `recommendation`) instead of planning around it. Create each Implementation-phase task with a clear name, a description of the work, and a reference to its source requirement in the description (or \"from the feature description\" if there were no formal requirements). Break the work down for a good implementation, not to mirror the requirement count — split large requirements into several tasks, group trivial ones.\n\nInclude, among the Implementation tasks, a task that creates or updates any documentation the feature changes — the architecture document, README, API docs, and any other docs referenced by the project's AGENTS.md. This covers both editing an existing doc to reflect a change and writing a new doc or section when the feature introduces something with no existing coverage. Place it as the last Implementation task, since it needs to see the complete diff to know what changed. This is not optional busywork: a later QA check will fail the ticket if a documented surface changed without a matching doc update, so an omitted or incomplete documentation task here comes back to Implementation anyway — plan it in up front instead.\n\nIdentify which repositories the ticket touches, for the Setup phase to create a worktree for each. A repository is touched if (a) the ticket edits files in it, or (b) it is a local path/workspace dependency of a repository being edited — check the composer.json (\"repositories\" entries of \"type\": \"path\") or package.json (workspace/\"file:\" dependencies) of every repository from (a) and include any such dependency repos even though the ticket never edits their source directly. In this stack, a service that requires basebuilder/shared-library depends on bb-service-shared this way, so touching such a service always means bb-service-shared needs its own worktree too.\n\nAlso create the Release-phase tasks the same way, choosing the steps that fit this project (for example tag and publish, push to a remote, or deploy), and leave any shared-state step (merge to master, publish, deploy to production) gated on the user's explicit go-ahead.\n\nWhen creating each Implementation task, also set its `model` field: pick the cheapest model capable of doing the task well, judged from that task's own name and description. Use `haiku` for simple, mechanical steps (renames, formatting, single-line config edits, running an existing scripted check). Use `sonnet` for typical implementation or review work needing ordinary engineering judgment — most tasks land here. Use `opus` only where the task's own difficulty genuinely needs it (deep architectural reasoning, ambiguous requirements needing careful synthesis, a step likely to need retries). Pass the picked value as the `model` argument to `tm_task_add` when creating the task, so it does not fall through to grind's own null-model fallback at execution time.\n\nRecord the plan's shape and any decisions in this task's result; put any architectural decision in the architecture document too."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "opus"
+
+[[phases.tasks]]
+name = "Devil's Advocate review"
+description = "Review the implementation plan for suboptimal engineering choices. Deliberately consider alternative approaches that were not taken. For each alternative, evaluate its pros and cons against the chosen approach. If a better approach is found, update the plan and repeat this review. Continue until the chosen approach is defensible. Flag any unresolved trade-offs for the human to decide."
+ai_description = "Run this review in a fresh sub-agent, not in the current context — instruct it to fetch the implementation plan itself via tm_task_show rather than passing it as a chat dump, so its critique is not biased by the reasoning that produced the plan. Have it challenge the plan: what alternatives exist that were not considered? Is the chosen approach the best one for this context? For each alternative it identifies, it should write a short comparison. If it concludes a different approach is better, update the plan tasks accordingly and run this review again. Stop when you are confident the plan is defensible.\n\nDo not write the findings to a markdown file. Return the full reasoning narrative — the alternatives considered, the comparisons, and the reasoning for the final verdict — as this task's summary, so it is stored in the task's ai_result field and stays searchable in the database; keep the first line a concise summary for the result field. Every unresolved trade-off or genuinely ambiguous decision the review flags for the human — one it cannot settle itself by improving the plan — is stored as a question entity via tm_question_add the moment it arises: kind 'ask', the ticket id, this task's id as `task`, and the model you are running as `model`. Write it self-contained for a cold reader who was not in this review — in plain words, saying when the issue comes up and how it unfolds, inventing no shorthand for things the user never named — and put the resolution you recommend and its reason in `recommendation`. Do not leave such a decision only in the summary or in chat, and do not defer writing it.\n\nBeyond the review and findings work described above, this task also states the assumptions its critique rests on, so the separate verifier task that follows can check them cold. As the sub-agent reasons, it surfaces every assumption its critique depends on — each thing it takes to be true that the ticket does not itself state — and records one log entry per assumption via tm_log_add with type \"assumption\" and task set to THIS task's own id (task-scoped, not ticket- or phase-scoped). It records every assumption, including ones it believes hold, and it does NOT check them itself: the following verifier task checks them cold, because the agent that stated an assumption is the one least able to see that it is false.\n\nEach assumption is one log entry. Its title is the assumption in one line. Its ai_content is prose following this fixed skeleton, in order: the assumption stated verbatim; its kind — \"fact\" (settled by something already in the repository: code, documentation, data, or a requirement already on the ticket) or \"intent\" (settled only by the user, on a point the requirements never specified); what would settle it (a file path, a document, a requirement id, or \"the user\"); the verdict, left as \"unchecked\" here for the verifier to reach; the evidence, if any is already at hand; the repair made, which is none at this stage; who registered it (this sub-agent and the model it ran as); and the pass number, which is 0 for this Devil's Advocate pass."
+actor = "agent"
+max_attempts = 3
+order = 2
+model = "opus"
+
+[[phases.tasks]]
+name = "Verify the review's assumptions"
+description = "Check the assumptions the preceding Devil's Advocate task recorded. A fresh agent reads each assumption cold from the log, classifies it as a fact (settled by the repository) or the user's intent (settled only by the user), checks and repairs the fact assumptions that do not hold, and stops the ticket for the user on any intent assumption. Every verdict is written back as a log entry. Bounded by the task's retry budget."
+ai_description = "Run this in a fresh sub-agent. Its job is to check, cold, the assumptions the preceding Devil's Advocate task stated — the agent that stated an assumption is the one least able to see it is false, so a separate agent checks them.\n\nFind the Devil's Advocate task by POSITION, never by name: it is the task immediately preceding this one in this same phase. Task names are template-defined and renamable, so name-matching is fragile — use tm_task_list on this phase and take the task one order position before this one. In this Planning phase the order is plan, Devil's Advocate, this verifier, grind-compatibility, so the task immediately before this one is the Devil's Advocate review.\n\nRead the assumption log entries with tm_log_list: read the preceding Devil's Advocate task's entries (task-scoped to that task) and this task's own entries — a previous pass of this verifier may have added some (see the repair rule below). Consider only entries of type \"assumption\". Where more than one entry exists for the same assumption because passes have appended entries, treat the latest entry for that assumption as the current one.\n\nClassify each assumption as one of two kinds:\n- \"fact\" — settled by something already in the repository: code, documentation, data, or a requirement already on the ticket. You check this kind yourself.\n- \"intent\" — settled only by the user, on a point the requirements never specified. You never verify this kind by reasoning and never quietly accept it.\nThe same sentence can be either: a claim already written as a requirement on the ticket is a fact you confirm; the identical sentence stated only as an assumption, that nobody specified, is a guess at the user's intent.\n\nFor each fact assumption, check it yourself against the repository and repair what does not hold. In this Planning phase the repair is to the plan's tasks: fix them via tm_task_add / tm_task_set. When a repair rests on a new assumption of your own, write that new assumption as a new \"assumption\" log entry on THIS task (task set to this task's own id), so the next pass — a fresh sub-agent that remembers nothing of this one — checks it cold.\n\nNever guess an intent assumption. The moment you find one, this task fails: make no repair for it, stop, and write this task's result summary beginning with the token FAILED: (the token grind reads), naming the assumption and the exact question the user must answer to settle it. grind then halts the ticket and the user answers. This rule applies here in Planning exactly as it does in Discovery.\n\nRecord every verdict, not only the failures. For each assumption you reach a verdict on, write an \"assumption\" log entry on THIS task with the fixed skeleton below — both the assumptions that held and the ones that did not — so a later cross-ticket analyzer has a baseline as well as the falsified ones.\n\nWrite no markdown findings file. Your findings live only in the assumption log entries and in this task's result field; a second copy in a file would drift from the log.\n\nEach assumption log entry has title = the assumption in one line, type = \"assumption\", task = this task's own id, and ai_content written as prose following this fixed skeleton, in order: the assumption stated verbatim; its kind (\"fact\" or \"intent\"); what would settle it (a file path, a document, a requirement id, or \"the user\"); the verdict (\"verified\", \"falsified\", or \"needs-user\"); the evidence for that verdict; the repair made, if any; who registered it (this sub-agent and the model it ran as); and the pass number.\n\nThis is a self-contained budgeted task. grind's protocol re-runs it under its max_attempts budget — a fresh sub-agent judging cold each pass — until a pass finds nothing false and adds no new assumption, or the budget is spent, then reports. Do not implement any loop yourself: state this pass's verdicts and repairs and stop."
+actor = "agent"
+max_attempts = 3
+order = 3
+model = "opus"
+
+[[phases.tasks]]
+name = "Grind-compatibility review"
+description = "Review each task just created for downstream execution and verify it is grind-compatible: the task description must contain enough context for an independent subagent to execute it without access to prior conversation history."
+ai_description = "IMPORTANT: Assume the workspace (git worktrees) has already been created by the time these tasks run. Do NOT treat the absence of a worktree on disk as a task defect — it will exist by the time these tasks execute. The grind-compatibility test is about whether the task's text is self-contained and gives a fresh subagent everything it needs, not about whether the current filesystem matches the task's expectations. Do NOT change a task's working directory from a worktree path to the main checkout path — a worktree will exist by then.\n\nRead each task just created. For each task, ask: could a fresh agent execute this task using only what is written in the task's name, description, and ai_description — with no access to this conversation or the other planning tasks? Check that each task names its source requirement, describes the work concretely, and does not rely on context that only exists in the conversation history. Fix any task that fails this check by rewriting its description to be self-contained. Record which tasks you changed and why."
+actor = "agent"
+max_attempts = 3
+order = 4
+model = "sonnet"
+
+[[phases]]
+name = "Setup"
+description = "Set up the workspace for this ticket, so Implementation has a git worktree ready for each repository it touches."
+ai_description = "Create the per-ticket workspace before Implementation begins — the detail on how is in this phase's tasks. This is interactive prep done before any grind run: worktree creation needs a git push to create the remote branch and set tracking, and a grind helper agent is not allowed to push (see ai-tm src/Mcp/Tools/GrindTool.php), so these tasks are completed and marked done by hand before an unattended grind run. Do not delete or clean up the ticket directory once created; it persists for later reference."
+order = 3
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Update affected repositories"
+description = "For every repository the plan will touch, make its main clone current: confirm it is on its default branch (main/master) with no uncommitted changes, then fetch and fast-forward it to origin. Never leave a main clone on a feature branch. This keeps the main clones a clean, up-to-date reference, so opening one in an IDE shows real, current main/master."
+ai_description = "For each repository identified in Planning, operate on the MAIN clone (not a worktree): run git fetch; confirm the clone is on its default branch (main or master) and has no uncommitted changes; then fast-forward it to origin/<default>. Do NOT push. Do NOT switch branches as normal operation. If a clone is on a feature branch, has uncommitted changes, or cannot fast-forward because the local branch has diverged, do not force anything — stop and flag it to the user. Record, per repository, the branch and the before/after commit in this task's result."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "haiku"
+
+[[phases.tasks]]
+name = "Create worktrees"
+description = "For every affected repository, create the ticket's worktree on the feature branch and push it. Follow docs/workflow.md (Worktree Setup): create the worktree from origin/<default>, push -u to create the remote branch and fix tracking, verify it tracks origin/feature/... (not origin/main or origin/master), and copy the repo's .env into the worktree if it has one. Creating the worktree leaves the main clone on its default branch."
+ai_description = "For each affected repository, follow docs/workflow.md Worktree Setup exactly:\n1. git -C <main-clone> worktree add <ticket-workspace>/<repo> -b feature/BBDEV-XXXX-<slug> origin/<default> — checks the feature branch out in the separate worktree directory; the main clone stays on its default branch.\n2. git -C <worktree> push -u origin feature/BBDEV-XXXX-<slug> — creates the remote branch and fixes tracking. (A grind helper agent is not allowed to push, so worktree creation runs before grind, not inside it.)\n3. git -C <worktree> branch -vv — confirm it tracks origin/feature/BBDEV-XXXX-<slug>, NOT origin/main or origin/master. If tracking is wrong, stop and fix it before continuing.\n4. If the main clone has a .env, copy it into the worktree (cp <main-clone>/.env <worktree>/.env).\nRecord each worktree path and its tracking line in this task's result."
+actor = "agent"
+max_attempts = 0
+order = 2
+model = "haiku"
+
+[[phases.tasks]]
+name = "Wire shared-library for local dev"
+description = "When this ticket's workspace includes the shared-library (bb-service-shared) worktree, wire each consuming service in the workspace to use it locally, so edits to the shared library are live and ready. Follow docs/workflow.md, section \"Shared Library → Working on shared-library changes locally\". Set this up by default whenever the shared-library worktree is present; skip only if you clearly know the shared library will not be touched."
+ai_description = "For each consuming service worktree (one that requires basebuilder/shared-library), wire its composer to the local bb-service-shared worktree so edits are live:\n1. Add a composer \"path\" repository pointing at ../bb-service-shared, options { \"symlink\": true }, as the FIRST entry in the repositories array.\n2. Set the basebuilder/shared-library constraint to \"@dev\".\n3. composer update basebuilder/shared-library --ignore-platform-reqs (creates the vendor symlink).\n4. git update-index --skip-worktree composer.json composer.lock so the local config never leaks into a commit.\n\nDo this by default whenever the bb-service-shared worktree is part of this ticket's workspace — it is cheap and makes the shared library ready to edit. Skip only if you clearly know the shared library will not be touched. If the bb-service-shared worktree is not in the workspace, there is nothing to wire.\n\nNote: making the branch ready to share (swap the path repo for a real git ref, commit the composer files, then restore the local config) is NOT setup — you do it only before a PR, deploy, or handoff (see docs/workflow.md \"Make the branch ready to share\"), and it needs a push, so it is not a grind step."
+actor = "agent"
+max_attempts = 0
+order = 3
+model = "haiku"
+
+[[phases.tasks]]
+name = "Create the Docker override"
+description = "Create docker-compose.override.yaml in the ticket directory, remapping each affected service's volume mounts to its worktree so the local Docker stack runs this ticket's code. Follow docs/workflow.md, section \"Docker Stack for Ticket Testing\". Always create it; a repo with no matching stack service simply maps nothing."
+ai_description = "Create tickets/feature/BBDEV-XXXX-<slug>/docker-compose.override.yaml. For each affected service, remap its volume mounts from basebuilder-stack/services/<svc> to that service's worktree (and to the bb-service-shared worktree if the ticket uses it). The stack then starts with `dkstart <ticket-number>`, which finds this override.\n\nAlways create the file. It lives only in the ticket directory, is not committed, and runs after \"Create worktrees\". Record which services you remapped. (If no affected repo maps to a stack service, a near-empty override is fine.)"
+actor = "agent"
+max_attempts = 0
+order = 4
+model = "sonnet"
+
+[[phases]]
+name = "Implementation"
+description = "Do the work. The tasks here were created by the Planning phase; each names the requirement it serves. Build on a feature branch, follow the project's architecture document, keep the code consistent with what's already there. This phase ships empty in the template — Planning fills it."
+ai_description = "Implement the tasks in this phase, in order. Each task names its source requirement — build exactly what that requires, no more. Follow the project's architecture document under docs/; if you hit a situation the architecture doesn't cover, stop and raise it with the user rather than inventing a pattern. Write tests alongside the code per the project's testing conventions. Work on a feature branch. Record what you did, and any decisions taken along the way, in each task's result. If the plan turns out to be wrong, return to Planning rather than improvising. This phase is empty until Planning populates it."
+order = 4
+max_attempts = 0
+tasks = []
+
+[[phases]]
+name = "QA"
+description = "The budgeted, self-fixing mechanical check-phase: static analysis, code style, the test suite, test coverage, the architecture check, the refactor check, the documentation check, the Ponytail over-engineering review, and finally the pre-merge checklist — one concern per task so a failure is individually visible. AI Review and Human Review follow, for checks that must never self-fix."
+ai_description = "Run the mechanical checks in this phase, in order. Every task's own max_attempts is 0 — the phase itself carries the retry budget (max_attempts = 3): a failing check is fixed inline and the phase re-runs its full pass until every check is clean or the phase's attempts are spent. Never lower a gate or weaken a test to make a check pass.\n\nThe pre-merge checklist runs last, and the Ponytail review runs immediately before it. That order matters: Ponytail deletes and simplifies code, so it has to finish before the checklist judges the final state, or the checklist's verdict describes code that no longer exists.\n\nWHAT THE TASK STATUS MEANS. A task ends `done` (OK:) only when its check ran and is clean: nothing found, or everything found was fixed inline and verified. A task ends `review` (REVIEW:) when it found something the user has to look at or decide: it stored an 'ask' question, it found a violation it may not fix here, or its verdict rests on a judgement the user should confirm. The dashboard shows review tasks; a done task with an open question hides the finding, so never end a task OK: while an 'ask' question of this task is open. A task ends `skipped` only when the tool it runs does not exist in the project; a check that can be done by reading (the architecture check, the documentation check) is never skipped. FAILED: means the check itself could not run.\n\nWhen a check fixes an issue inline and the fix involved a real choice between reasonable options, record that decision as a 'check' question via tm_question_add — the question states what was hit, and the recommendation is the decision taken — so the user can later confirm it or reverse it; the task may still end OK:, and its result names the check question. An issue whose only sound fix would create a new requirement or an architecture change is not fixed here: store it as an 'ask' question via tm_question_add and end the task REVIEW:, since that call is the user's. Pass the ticket id, the check task's id as `task`, and the model you are running as `model` on every question, and write each self-contained for a cold reader in plain words.\n\nThis phase does not judge requirements traceability and runs no correctness review — those live in AI Review, which runs once, judge-only. Ponytail is the exception and belongs here rather than there: it hunts complexity only, explicitly not correctness, and it fixes as it goes, which is this phase's pattern and not AI Review's.\n\nBasebuilder bundles static analysis, code style, and refactoring in one toolchain from the basebuilder/bb-code-quality package: vendor/bin/bb-quality-fix applies fixes in Rector → ECS → PHPStan order, vendor/bin/bb-quality-check verifies, and the single tools are vendor/bin/bb-phpstan-dry, bb-cs-fix(-dry) and bb-rector(-dry). There are no phpstan.neon, .php-cs-fixer or rector.php files to look for: the configuration lives in that package. Run every quality tool from the host against the worktree, from inside the repository directory, never via docker exec. The integration tests are the one exception: see the Test suite task."
+order = 5
+max_attempts = 3
+
+[[phases.tasks]]
+name = "Static analysis"
+description = "Run the project's static analysis (PHPStan). The task fails if it reports any error."
+ai_description = "Static analysis is PHPStan, bundled into Basebuilder's bb-quality toolchain alongside code style and refactoring. Run all commands from inside the repo directory (`cd` to it first) — Rector fails silently on the wrong rule set when called from a different working directory. Run `vendor/bin/bb-quality-check` to verify. This task owns the PHPStan (static-analysis) concern: any PHPStan error in the bb-quality-check output fails the task — record it and stop, do not attempt the fix here. Do not raise the baseline or lower the level to make it pass. (bb-quality-fix, run by the Code style and Refactor check tasks, applies Rector/ECS fixes but does not fix PHPStan logic errors.)"
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "haiku"
+
+[[phases.tasks]]
+name = "Code style"
+description = "Check code style (ECS); fix and re-run until clean."
+ai_description = "Code style is ECS, bundled into Basebuilder's bb-quality toolchain alongside static analysis and refactoring. Run all commands from inside the repo directory (`cd` to it first) — Rector fails silently on the wrong rule set when called from a different working directory. Run `vendor/bin/bb-quality-fix` to apply all fixes in the correct order (Rector → ECS → PHPStan), then `vendor/bin/bb-quality-check` to confirm. This task owns the ECS (code-style) concern: apply the fixes and re-run bb-quality-fix until bb-quality-check reports no style violations. Do not add suppression comments or skip files to make it pass — fix the actual code."
+actor = "agent"
+max_attempts = 0
+order = 2
+model = "haiku"
+
+[[phases.tasks]]
+name = "Test suite"
+description = "Run the full test suite: the unit tests from the host, the integration tests inside the service's fpm container against the local stack. The task fails on any failing or skipped test."
+ai_description = "Two runs per PHP worktree, both required. (1) Unit tests, from the worktree directory with the host PHP: `vendor/bin/bb-phpunit` or `vendor/bin/phpunit tests/Unit`. (2) Integration tests (tests/Integration, where the repository has them): they need the local Docker stack and the worktree's .env names the container hostnames (mariadb, elasticsearch, mongo), so they cannot run from the host. Run them inside the service's fpm container, which mounts the worktree: `docker exec basebuilder-stack-<service>-fpm-1 php vendor/bin/phpunit tests/Integration`; find the container name with `docker ps`. Check first that the stack is up; if it is not, start it from the basebuilder-stack directory with the ticket's docker-compose override and wait until the services accept connections. Integration tests may wipe local test data; that is what the local stack is for. A failing, skipped, or incomplete test in either run fails the task: record it and stop, do not attempt the fix here. Do not delete, skip, or weaken a test to make it pass. A connection error is a failed run, not an acceptable skip: fix the environment and run again."
+actor = "agent"
+max_attempts = 0
+order = 3
+model = "haiku"
+
+[[phases.tasks]]
+name = "Test coverage"
+description = "Check that the ticket's tests cover every requirement, or for a bug-fix ticket that a test reproduces the bug. Report-only: a gap fails the task — record it and stop, do not add the missing test here."
+ai_description = "For each requirement entity on this ticket, find the test that proves it and confirm the test actually exercises that behaviour, not just that the code exists. For a bug-fix ticket, confirm a test reproduces the original bug and would fail without the fix. Record per requirement (or the bug) the covering test, or \"no test\" where none exists, in this task's result. A missing or inadequate test fails the task — record it and stop, do not write the test here. Do not weaken an existing test to claim coverage."
+actor = "agent"
+max_attempts = 0
+order = 4
+model = "sonnet"
+
+[[phases.tasks]]
+name = "Architecture check"
+description = "Check the ticket's changes against the architecture document. Basebuilder has no dependency-boundary tool; the check is done by reading. The task fails on any violation."
+ai_description = "There is no Deptrac or other architecture tool in Basebuilder; do not look for one and do not skip this task for its absence. The architecture is defined in the basebuilder-stack repository: docs/architecture/target-state.md and the other documents under docs/architecture/. Read them, then read the ticket's full diff (git diff origin/<base>...HEAD in every worktree of the ticket). For every changed or added file, check that it follows the rules those documents state: where a class of this kind lives, what it may depend on, how exceptions and logging are done, how services and value objects are shaped. Record in the result one line per rule that applies to the diff, with pass or fail and the file. Any violation ends the task REVIEW: with the violation named; do not fix it here and do not reinterpret a rule to make the code pass."
+actor = "agent"
+max_attempts = 0
+order = 5
+model = "haiku"
+
+[[phases.tasks]]
+name = "Refactor check"
+description = "Check for automated refactor/modernization suggestions (Rector); apply and re-run until clean."
+ai_description = "Refactoring is Rector, bundled into Basebuilder's bb-quality toolchain alongside static analysis and code style. Run all commands from inside the repo directory (`cd` to it first) — Rector fails silently on the wrong rule set when called from a different working directory. Run `vendor/bin/bb-quality-fix` (which runs Rector first) to apply the suggested changes, then `vendor/bin/bb-quality-check` to confirm. This task owns the Rector (automated refactor/modernization) concern: apply and re-run until bb-quality-check reports no further Rector changes. Do not skip files or lower a rule to make it pass."
+actor = "agent"
+max_attempts = 0
+order = 6
+model = "haiku"
+
+[[phases.tasks]]
+name = "Documentation check"
+description = "Confirm the documentation this ticket should have updated was actually updated, by comparing the diff against the docs."
+ai_description = "Read the ticket's full diff (all commits since the branch diverged from its base branch), across every repository the ticket touched — a Basebuilder ticket may touch more than one repo; check the diff in each. For each change that alters documented behavior — a route or query parameter added/renamed/removed, a public API shape, a CSS class or design-system catalogue entry, an architectural decision, a feature added or removed, a config option, a queue or worker — confirm the matching documentation was updated in the same set of commits, and confirm existing documentation still accurately describes the current code, not just the code as it stood when that documentation was first written — a later commit in the same ticket (a fix from a review, a rename, a guard clause added afterward) can leave earlier documentation stale even when nothing was originally missing.\n\nCheck each touched repo's own docs: its architecture document (the exact path varies by repo — docs/architecture.md or docs/architecture/architecture.md; check which the repo actually uses), README, API docs, and any other docs referenced by that repo's own AGENTS.md. Always check the stack-wide documentation in basebuilder-stack too: docs/modules/<module>.md for every module the ticket touched, and docs/architecture/ where an architectural decision changed. Those stack documents live on basebuilder-stack master, not on the ticket's branch; an uncommitted edit there counts as updated.\n\nA documentation gap is fixed here, not asked about: a wrong or incomplete document is corrected at once, in the repository where the document lives, and the fix is recorded in this task's result. A wording choice is never a question. Only a gap whose fix needs a decision the user has not taken (a new architectural rule, a changed requirement) becomes an 'ask' question via tm_question_add, and then the task ends REVIEW:.\n\nPut the change-to-documentation mapping in this task's result, one line per changed surface, citing the doc file and section that covers it, and note for each whether it needed no change or got a fix."
+actor = "agent"
+max_attempts = 0
+order = 7
+model = "sonnet"
+
+[[phases.tasks]]
+name = "Ponytail review"
+description = "Run the Ponytail over-engineering review against this ticket's changes: what to delete, simplify, or replace with a standard-library or native equivalent. Scoped to the diff, not the full repositories. Clear-cut simplifications are applied in place; anything bigger becomes a question for the user."
+ai_description = "Run the ponytail:ponytail-review skill against this ticket's changes — the diff of each feature branch against its base, for every repository in the workspace. Do not review whole repositories; only the changed code is in scope. Ponytail hunts complexity, not correctness: reinvented standard library, unneeded dependencies, speculative abstractions, dead flexibility — one line per finding with location, what to cut, and what replaces it.\n\nThis runs before the pre-merge checklist on purpose. Ponytail changes code, so cutting first means the checklist judges the code that will actually be merged; the other way round, its verdict goes stale the moment a simplification lands.\n\nFollowing this phase's self-fixing practice: apply the clear-cut simplifications (dead code, a reinvented standard-library call, an unused abstraction), and record what was applied and what was intentionally left in this task's result. Re-run the quality tools and the test suites from the host afterwards, never via docker exec.\n\nA simplification that would change the architecture, an interface other code depends on, or a requirement is not applied here — store it as an 'ask' question via tm_question_add (the ticket id, this task's id as `task`, the model you are running as `model`, self-contained for a cold reader with your recommendation) and leave the call to the user. Zero findings is a valid outcome."
+actor = "agent"
+max_attempts = 0
+order = 8
+model = "sonnet"
+
+[[phases.tasks]]
+name = "Refresh roave/security-advisories"
+description = "Re-pin the roave/security-advisories guard so composer update refuses versions whose problems are known up to today."
+ai_description = "For every PHP worktree of this ticket (composer.json present), run `composer update roave/security-advisories` and commit the lockfile change on the feature branch. The package holds no code, only a conflict list, so nothing else changes. If the update fails, a version already in the lockfile is on the new advisory list — name that package and stop; the failure is itself a finding. If a repository does not carry roave/security-advisories in require-dev, record that as a finding instead of adding it silently. Skip repositories without composer.json."
+actor = "agent"
+max_attempts = 0
+order = 9
+
+[[phases.tasks]]
+name = "Package check"
+description = "Run the package check on every repository the ticket touches."
+ai_description = "Run the /package-check skill in each worktree of this ticket. Where the report says a plain lockfile refresh reaches a fix, apply it, verify with the quality checks and the test suite, and commit on the feature branch. Where a fix is blocked by a constraint, has no released fix, or needs a decision, store a question instead of acting. This task runs before the pre-merge checklist so the checklist judges the final dependency state."
+actor = "agent"
+max_attempts = 0
+order = 10
+
+[[phases.tasks]]
+name = "Pre-merge checklist"
+description = "Work through .claude/commands/pre-merge-check.md item by item."
+ai_description = "Open .claude/commands/pre-merge-check.md in the basebuilder-stack repo, go through every rule, do what it says, record each result, and write the report file it prescribes in the ticket directory. Where the checklist references rules from the architecture document, check against those too. Any failed rule fails the task, also a rule that fails on code older than the ticket: a rule scans what it says it scans, and \"pre-existing\" is not a reason to set a failure aside. A failure that is not the user's call is fixed inline; one that is the user's call is stored as an 'ask' question via tm_question_add and the task ends REVIEW:. Two rules need care: \"No open Flappie issues\" is satisfied when every CodeRabbit comment on the ticket's pull requests has a reply recording its disposition, even without a CODERABBIT_REVIEW.md file; \"Bitbucket pipeline passed\" is checked against the pushed feature branch via the Bitbucket MCP tool as the rule describes, and a branch not yet pushed is pushed first."
+actor = "agent"
+max_attempts = 0
+order = 11
+model = "sonnet"
+
+[[phases]]
+name = "AI Review"
+description = "AI-driven review, judge-only: each task runs once and never loops back through this phase. The requirements traceability check and the functional review record findings and stop. Our own AI code review runs next and is the phase's correctness hunt — it goes first among the code reviews, so our own eyes see the diff before any external tool does. Gemini and the CodeRabbit CLI follow, all three reading the local diff before any pull request exists, and they fix Critical and High findings in place per Basebuilder practice. Only then are the pull requests opened, CI confirmed green, and the CodeRabbit PR review run last."
+ai_description = "Run these tasks in order, once each (max_attempts = 0 on the phase and every task). Verify requirements traceability first, then the functional review, then the code reviews.\n\nOur own AI code review comes before every external tool, and it is the only task in the whole template whose job is to hunt correctness bugs by reading the code. Nothing upstream does that: the QA phase runs tools, and the Ponytail review there is complexity-only by design. If this task is skipped or run shallowly, a silent logic bug reaches a reviewer or production, so give it the effort that implies and run it on a strong model.\n\nThe Gemini and CodeRabbit tasks carry Basebuilder's existing wording, which fixes Critical/High findings in place — keep that behaviour.\n\nOn ordering. The three reviews that read the workspace diff directly — our own AI code review, Gemini, and the CodeRabbit CLI — need no pull request, so they all run before the pull requests are opened. Their fixes then land on the branch before anyone else sees it, instead of arriving as churn on an open pull request. Open pull requests must not run until the QA phase's code quality and test suite checks and this phase's requirements traceability check have all passed. Confirm CI is green runs once the pull requests exist, and the CodeRabbit PR review runs last, against green CI.\n\nRoute findings the AI cannot itself resolve as questions via tm_question_add (kind 'ask' for a user call, 'check' for a decision already taken), passing the ticket id, the review task's id as `task`, and the model you are running as `model`, each self-contained for a cold reader with your recommendation."
+order = 6
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Requirements traceability"
+description = "Confirm every requirement entity on the ticket is met by the built code."
+ai_description = "For each requirement entity on the ticket, find the code and tests that satisfy it and confirm it is actually met. Put the requirement-to-code mapping in this task's result. For each requirement, call mcp__tm__tm_requirement_set with the requirement's id and verification set to \"met\" if the code fully satisfies it, \"unmet\" if it does not, or leave it \"unverified\" only if you genuinely cannot determine the outcome (rare — explain why in the result if this happens). Do this for every requirement before finishing, not just the ones that fail. Any requirement you set to \"unmet\" fails this task — record it and stop, do not attempt the fix here."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "sonnet"
+
+[[phases.tasks]]
+name = "AI functional review"
+description = "Run the feature and verify it actually works against the requirements: drive the user interface in a real browser and exercise the API endpoints, confirming each requested behaviour functions end to end. Findings go in the result; a functional failure means recording it and stopping here."
+ai_description = "Start the application with the project's run/dev command. Exercise the feature end to end against the requirements: drive the user interface in a real browser with Playwright, and call the REST endpoints directly where the feature exposes them. Confirm each requested behaviour actually works when run — not merely that the tests pass. If the diff adds or changes a pointerdown/pointerup/click/mousedown/touch handler on an interactive element, exercise it twice: once with normal mouse-driven interaction, and once with Playwright touch emulation (hasTouch: true, isMobile: true, using page.tap()) — pointer events fire identically for mouse and touch unless the code explicitly branches on event.pointerType, so mouse-only testing does not prove touch works (BBDEV-2320). Record what you exercised and the per-requirement outcome, including the touch pass/fail where applicable, in this task's result; a functional failure means recording it and stopping here, not attempting the fix. Leave the application running when you finish so the human functional review that follows can start immediately. Performed by a clean Claude Code agent now; designed to be delegated later to another AI with browser control."
+actor = "agent"
+max_attempts = 0
+order = 2
+model = "sonnet"
+
+[[phases.tasks]]
+name = "AI code review"
+description = "A fresh-context agent of our own reviews the ticket's whole diff for correctness and subtle bugs, architecture and convention adherence, readability and test quality. This runs before the external tools, so our own eyes are first, not last."
+ai_description = "Review the complete set of changes this ticket made — the diff of each feature branch against its base, across every repository in the workspace — with fresh eyes and no assumption that earlier tasks got it right.\n\nRead the project's own rules first: AGENTS.md, CLAUDE.md, docs/architecture/target-state.md, and the docs/modules/ page for each bounded context the diff touches. Those documents are the authority; existing code may be drift.\n\nHunt what the mechanical QA tasks structurally cannot:\n- Correctness and subtle bugs. Give every branch, loop, boundary and arithmetic expression its own pass. Feed each new function its degenerate inputs on paper — an empty collection, a zero, a negative number, an inverted range, a value one past a limit, a null — and say what it actually returns. A guard that silently produces a wrong answer instead of failing is the highest-value finding here.\n- Adherence to the documented architecture and conventions, including exception root-cause categories and log levels.\n- Readability and maintainability for someone meeting the code cold.\n- Test quality: does each test assert behaviour a requirement cares about, and would it fail if the logic broke? Tests that mirror the implementation's internals prove nothing.\n\nScope is code this ticket changed. Decide newness with git diff origin/<base>...HEAD, never blame or dates. Pre-existing problems on the base branch are out of scope.\n\nWrite every finding into this task's result grouped by severity, each with file and line, the concrete input or state that triggers it, and what goes wrong. Following this phase's fix-in-place practice: fix the clear-cut ones, commit them, and record what was fixed and what was left. A finding whose fix would change the architecture, an interface other code depends on, or a requirement is not fixed here — store it as an 'ask' question via tm_question_add (the ticket id, this task's id as `task`, the model you are running as `model`, self-contained for a cold reader, with your recommendation) and leave the call to the user.\n\nRun the quality tools and test suites from the host afterwards, never via docker exec. Finding nothing is a valid outcome; say so plainly rather than inventing a finding to look thorough."
+actor = "agent"
+max_attempts = 0
+order = 3
+model = "opus"
+
+[[phases.tasks]]
+name = "AI code review - Gemini"
+description = "Run /code-review-briefing to generate CODE_REVIEW.md in the ticket directory. This file is the input for an external Gemini code review. The task is done when CODE_REVIEW.md exists and covers all repositories in the workspace."
+ai_description = "Run the /code-review-briefing skill. It reads the active ticket from tm, collects the git diff for each repository in the workspace, adds surrounding context for significant changes, and writes CODE_REVIEW.md to the ticket directory. Confirm the file exists and is not empty before marking this task done. If the diff adds or changes a pointerdown/pointerup/click/mousedown/touch listener on an interactive element, call this out explicitly in CODE_REVIEW.md's context notes — whether it branches on event.pointerType where mouse and touch must behave differently — so the external Gemini reviewer's attention is drawn to it (pointer events fire identically for mouse, touch, and pen unless the code guards for it; BBDEV-2320 shipped broken on touch because nothing flagged this). Do not send the file anywhere — the user handles the Gemini review step externally."
+actor = "agent"
+max_attempts = 0
+order = 4
+model = "haiku"
+
+[[phases.tasks]]
+name = "AI code review - CodeRabbit CLI"
+description = "Run /code-review-workspace to run a CodeRabbit (Flappie) review across all repositories in the ticket workspace. Read every finding and fix Critical and High issues before moving on. The review output is written to CODERABBIT_REVIEW.md in the ticket directory."
+ai_description = "Run the /code-review-workspace skill. It finds all repositories under the ticket's workspace/, runs the coderabbit:code-reviewer agent against each one, and writes CODERABBIT_REVIEW.md to the ticket directory. After the review is written: read every Critical and High finding, apply fixes, commit them, and record what was fixed and what was intentionally left in this task's result. Additionally, independently of what CodeRabbit itself flags: if the diff adds or changes a pointerdown/pointerup/click/mousedown/touch listener on an interactive element, check whether it needs to (and does) branch on event.pointerType (or an equivalent input-type check) — pointer events fire identically for mouse, touch, and pen by design, so code that assumes one input method without gating on pointerType silently misbehaves on the others (BBDEV-2320). Treat a missing gate as a finding of your own even if CodeRabbit did not surface it. Do not move on until no Critical or High finding remains open."
+actor = "agent"
+max_attempts = 0
+order = 5
+model = "sonnet"
+
+[[phases.tasks]]
+name = "Open pull requests"
+description = "Confirm all code is committed and pushed on every feature branch, then open a pull request for each repository involved in the ticket. The task is done when every PR exists and is open — CI does not need to have run yet."
+ai_description = "For each repository in the workspace: confirm there are no uncommitted changes and no unpushed commits on the feature branch. Push if needed. Then open a pull request targeting the base branch (main or master) with a clear title and a description summarising the changes. Record every PR URL in this task's result. Do not wait for CI here — CI is checked in a later task. Do not open PRs until the code quality, test suite, and requirements traceability tasks have all passed."
+actor = "agent"
+max_attempts = 0
+order = 6
+model = "sonnet"
+
+[[phases.tasks]]
+name = "Confirm CI is green"
+description = "Wait for the CI pipeline to complete on every open pull request. All checks must pass before moving on to the CodeRabbit PR review."
+ai_description = "Check the CI pipeline status on every PR opened in the \"Open pull requests\" task. Wait for all checks to complete. If any check fails: identify the failing step, fix the root cause (returning to Implementation if needed), re-run the relevant QA checks, push, and wait for CI again. Only mark this task done when every PR's pipeline is fully green."
+actor = "agent"
+max_attempts = 0
+order = 7
+model = "sonnet"
+
+[[phases.tasks]]
+name = "AI code review - CodeRabbit PR"
+description = "Wait for Flappie (CodeRabbit) to post its automated review on the pull request in Bitbucket. Read every comment and fix what needs fixing. Critical and High findings must be resolved before marking this task done. Low findings should be reviewed and fixed unless there is a clear reason not to."
+ai_description = "Open the pull request on Bitbucket and read Flappie's (CodeRabbit's) review comments. Fix all Critical and High findings — apply the fix, commit, and push. Review every Low finding and fix it unless there is a specific architectural or intentional reason not to; document any finding you deliberately leave. Additionally, independently of CodeRabbit's comments: if the diff adds or changes a pointerdown/pointerup/click/mousedown/touch listener on an interactive element, check whether it needs to (and does) branch on event.pointerType (or an equivalent input-type check) — pointer events fire identically for mouse, touch, and pen by design, so code that assumes one input method without gating on pointerType silently misbehaves on the others (BBDEV-2320). Treat a missing gate as a finding of your own even if CodeRabbit did not surface it. Record a summary of all findings and their resolutions in this task's result. Only mark this done when no Critical or High finding remains open."
+actor = "agent"
+max_attempts = 0
+order = 8
+model = "sonnet"
+
+[[phases]]
+name = "Human Review"
+description = "The manual sign-off: the user and a colleague confirm the feature works as intended and review the code. These tasks are for humans — the AI does not complete them."
+ai_description = "Leave every task in this phase for its human actor. Do not mark any done on their behalf; wait for the user's or colleague's own confirmation. The pull requests on Bitbucket are the primary code-review surface."
+order = 7
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Human functional review"
+description = "The user runs the feature and confirms it does what was requested and feels right. This task is for the user — the AI does not complete it."
+ai_description = "Do not mark this task done — it is the user's hands-on check that the feature works and matches intent. For a user interface the user opens it in a browser; for an API the user exercises the endpoints. The application should already be running from the AI functional review. Leave this task for the user."
+actor = "human"
+max_attempts = 0
+order = 1
+
+[[phases.tasks]]
+name = "Human code review"
+description = "The user reviews the implemented code. This task is for the user — the AI does not complete it."
+ai_description = "Do not mark this task done — it is the user's review of the code. When the user is ready to start, run the /human-code-review command: it opens a frozen side-by-side diff page per repository in his browser, records his spoken comments verbatim in a numbered list, answers discussion inline, fixes and commits each accepted comment locally, and moves to the next repository only on his say-so. He may instead review on the Bitbucket pull request or in the IDE if he prefers. He approves the PR when satisfied. Leave the task's completion to him."
+actor = "human"
+max_attempts = 0
+order = 2
+
+[[phases.tasks]]
+name = "Colleague code review"
+description = "A colleague reviews the implemented code. This task is for a colleague — the AI does not complete it."
+ai_description = "Do not mark this task done — it is a colleague's review of the code. Leave it for the colleague. The pull request on Bitbucket is the primary review surface."
+actor = "human"
+max_attempts = 0
+order = 3
+
+[[phases.tasks]]
+name = "Colleague functional test"
+description = "A colleague runs the feature and confirms it works as expected. This task is for a colleague — the AI does not complete it."
+ai_description = "Do not mark this task done — it is a colleague's hands-on check that the feature works. Leave it for the colleague."
+actor = "human"
+max_attempts = 0
+order = 4
+
+[[phases]]
+name = "Release"
+description = "Get the finished, reviewed feature out. Confirm everything is committed and pushed, prepare the environment variables the feature needs, bring the feature branches up to date with the base branch, optionally deploy the feature branch for a final look, then merge to master and deploy to production. Merging and production deployment are the user's calls."
+ai_description = "Perform the release tasks in order. Steps that change shared state — merging base updates into feature branches (which pushes), merging to master, deploying to production — are never unprompted; do them only on the user's explicit go-ahead. Documentation updates happen earlier, as the last Implementation task, and are checked in QA before this phase runs — nothing to do here for docs."
+order = 8
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Final commit and push"
+description = "Confirm everything is committed and the branch is pushed to the remote: the working tree is clean and nothing local is left behind."
+ai_description = "git status clean; all feature changes committed with messages naming the ticket; the branch pushed to the remote (origin). Always applies, every project."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "haiku"
+
+[[phases.tasks]]
+name = "Environment variables to share"
+description = "List the new or changed environment variables the feature needs, with a note on each."
+ai_description = "Compile the list of environment variables this feature introduces or changes, each with a short note on what it is for, so the user can add them to the staging and production environments. Put the list in this task's result."
+actor = "agent"
+max_attempts = 0
+order = 2
+model = "haiku"
+
+[[phases.tasks]]
+name = "Merge main-branch updates into all feature branches and update lockfiles"
+description = "Bring every feature branch up to date with the latest base branch and refresh its lockfiles before the production merge. This is a shared-state, push-bearing step — only on the user's explicit go-ahead."
+ai_description = "For each repository's worktree involved in the ticket: fetch and merge the current main/master into the feature branch, resolve any conflicts, and update the lockfiles (composer.lock / pnpm-lock.yaml) so the branch builds against current dependencies. For a ticket that touched bb-service-shared, also make the branch ready to share — repoint the committed composer.json at a real shared-library git ref rather than the local path repo (see docs/workflow.md \"Make the branch ready to share\"), commit the composer files, then restore the local dev config. Push each updated branch. This step changes shared state and needs a git push, so do it only on the user's explicit go-ahead — never unprompted."
+actor = "human"
+max_attempts = 0
+order = 3
+
+[[phases.tasks]]
+name = "Deploy feature branch to a review environment (optional)"
+description = "Optionally deploy the feature branch somewhere for a final look before merging."
+ai_description = "If the project has a review or staging deployment for feature branches, deploy this branch there and confirm the feature works as intended. If the project has no such environment, skip this task."
+actor = "human"
+max_attempts = 0
+order = 4
+
+[[phases.tasks]]
+name = "Merge to master and deploy to production"
+description = "Merge the feature branch and deploy to production. The user's call."
+ai_description = "Once the user approves, merge the feature branch to master/main and deploy to production following the project's deployment process. Do not merge or deploy to production without the user's explicit go-ahead."
+actor = "human"
+max_attempts = 0
+order = 5
+
+[[phases.tasks]]
+name = "Verify the merge and close the ticket"
+description = "Confirm the earlier merge task actually landed on master before this ticket is allowed to close."
+ai_description = "For every repo this ticket has a worktree for: check whether the ticket's branch has any commits (git log <branch> vs its base). A worktree created but never committed to needs no check — skip it. For every repo with real commits, verify master actually contains them: `git rev-list --count master..<branch>` must be 0 (every commit on the branch is already in master), not just that the earlier 'Merge to master and deploy to production' task was marked done — a task can be marked done by mistake without the merge having happened. If a remote exists, also confirm master is not ahead of its pushed state (`git rev-list --count origin/master..master` is 0). If any repo fails either check, do not mark this task done: report FAILED, name the exact repo and branch that is not merged or not pushed, and stop — the ticket must not close until a human completes the actual merge. Only when every touched repo passes does this task close, and with it the ticket."
+actor = "agent"
+max_attempts = 0
+order = 6
+model = "haiku"

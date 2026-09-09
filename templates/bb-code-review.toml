@@ -1,0 +1,212 @@
+description = "Template for reviewing a colleague's code across the Basebuilder multi-repo stack: check their branches out read-only, run the full QA battery and all AI reviews (fresh-context, Gemini, CodeRabbit, Ponytail) report-only against the changes, consolidate every finding into one review report with draft PR comments, and leave posting the feedback to the user. Code review only — no functional testing; use the functional test template when the colleague asks for a feature test."
+ai_description = "Work the phases in order. This ticket reviews a COLLEAGUE's work: everything is report-only. Never modify, commit, or push on the colleague's branches — no bb-quality-fix, no fix-in-place; every finding is recorded as feedback instead. Review only the code changed by the colleague's ticket (the diff of each branch against its base) — pre-existing issues on the base branch are out of scope. Intake captures the scope (Jira ticket, repos, branches, PRs) and the requirements as requirement entities. Setup checks the colleague's branches out read-only in worktrees. Automated checks run the QA battery (bb-quality-check, bb-phpunit, CI status, documentation, pre-merge checklist) and record findings. AI Review runs requirements traceability and the code reviews (fresh-context, Gemini briefing, CodeRabbit CLI, Ponytail over-engineering review, triage of the CodeRabbit PR comments), also report-only. Consolidation merges every finding into one report with draft PR comments. The user reads, edits, and posts the feedback himself — the AI never posts to the PR and never transitions Jira.\n\nVERDICT RULE FOR THIS TICKET (overrides the general grind guidance on when to return REVIEW:). Only the Consolidation task may end its summary with `REVIEW:`. Every other agent task ends its summary with `OK:` and writes its findings, doubts and judgement calls into its own task result, where the Consolidation task ranks them once in the review report. A finding in the colleague's code is never a reason to return `REVIEW:` — collecting findings is the job of these tasks, not an exception to flag. Whether a finding blocks the merge is decided by the Consolidation task and then by the user reading the report, never by an individual check. Use `FAILED:` only when the check itself could not be run at all. Storing questions stays free: keep storing `check` questions, and an `ask` question whenever one genuinely arises."
+
+[[phases]]
+name = "Intake"
+description = "Capture what is being reviewed: the colleague's Jira ticket, the repositories and branches, the pull requests — and the requirements the code must meet, as requirement entities on this ticket."
+ai_description = "Read-only intake. Ask the user for the colleague's Jira ticket key and/or PR links if they were not provided. Never transition or comment on Jira; never post on the PRs."
+order = 1
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Capture the review subject and requirements"
+description = "Read the colleague's Jira ticket and pull requests, record the scope (repositories, branches, PR links), and capture each requirement the change must meet as a requirement entity on this review ticket."
+ai_description = "Inputs from the user: the colleague's Jira ticket key and/or the Bitbucket PR links. Read the Jira ticket (description, acceptance criteria, comments) via the Jira MCP tools — read-only, never transition or comment. Open each pull request and record: repository, source branch, target branch, PR link, and a one-line summary of what the PR changes. Also skim the PR's existing comments and activity so the review does not repeat feedback already given. Capture each requirement the change is supposed to meet as a requirement entity via tm_requirement_add — discrete, individually verifiable statements, phrased from the Jira ticket's own text, not invented; if the Jira ticket is too thin to yield requirements, record that and ask the user rather than inventing them. Record the full scope (repos, branches, PR links, requirement count) in this task's result. If the Jira ticket or PRs cannot be found, stop and ask the user rather than guessing."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "sonnet"
+
+[[phases]]
+name = "Setup"
+description = "Check the colleague's branches out read-only: update the main clones, then create a worktree per repository on the colleague's existing branch. No new branches, no commits, no pushes."
+ai_description = "This workspace exists to read the code and run the checks. Never commit or push from these worktrees — they hold a colleague's branch, not ours."
+order = 2
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Update affected repositories"
+description = "For every repository in the review scope, make its main clone current: confirm it is on its default branch (main/master) with no uncommitted changes, then fetch and fast-forward it to origin. Never leave a main clone on a feature branch."
+ai_description = "For each repository recorded at intake, operate on the MAIN clone (not a worktree): run git fetch; confirm the clone is on its default branch (main or master) and has no uncommitted changes; then fast-forward it to origin/<default>. Do NOT push. Do NOT switch branches as normal operation. If a clone is on a feature branch, has uncommitted changes, or cannot fast-forward because the local branch has diverged, do not force anything — stop and flag it to the user. Record, per repository, the branch and the before/after commit in this task's result."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "haiku"
+
+[[phases.tasks]]
+name = "Create review worktrees"
+description = "For every repository in the review scope, create a worktree in the ticket directory checked out on the colleague's existing feature branch, and prepare it for the quality tools (composer install, copy .env). Never push, never commit."
+ai_description = "Create the ticket directory following the project's convention (tickets/feature/BBDEV-XXXX-<slug>/, using the colleague's Jira key). For each repository in scope:\n1. git -C <main-clone> fetch\n2. git -C <main-clone> worktree add <ticket-dir>/<repo> <colleague-branch> — this creates a local branch tracking origin/<colleague-branch>; the main clone stays on its default branch.\n3. git -C <worktree> branch -vv — confirm it tracks the colleague's origin branch.\n4. composer install in the worktree (the quality tools are vendor binaries).\n5. If the main clone has a .env, copy it into the worktree (cp <main-clone>/.env <worktree>/.env).\nNEVER push and NEVER commit from these worktrees — this is a read-only checkout of a colleague's branch. Record each worktree path and its tracking line in this task's result."
+actor = "agent"
+max_attempts = 0
+order = 2
+model = "haiku"
+
+[[phases]]
+name = "Automated checks"
+description = "Run the QA battery against the colleague's code, report-only: code quality (Rector, ECS, PHPStan via bb-quality-check), the test suite, CI status, the documentation check, and the pre-merge checklist. Findings are recorded for the consolidation step — nothing is fixed."
+ai_description = "Run every check and record its findings in the task's result, including a clean pass. Never fix anything: no bb-quality-fix, no code edits, no commits. A failing check here is a review finding, not a defect to repair — this phase records and moves on; it never loops back. A task in this phase fails only when its check could not be run at all."
+order = 3
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Code quality check"
+description = "Run bb-quality-check (Rector, ECS, PHPStan) in every worktree and record all findings. Report-only — never run bb-quality-fix on a colleague's branch."
+ai_description = "For each repository worktree: cd into the repo directory first — Rector fails silently on the wrong rule set when called from a different working directory — then run `vendor/bin/bb-quality-check`. Record every reported issue (tool, file, line, message) in this task's result, grouped per repository; a clean pass is also recorded. Do NOT run bb-quality-fix and do not edit any file: this is a colleague's code and every issue is a review finding for the consolidation task. This task does not fail on findings — its job is to collect them; it fails only if the check itself cannot run."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "haiku"
+
+[[phases.tasks]]
+name = "Test suite"
+description = "Run the full test suite (bb-phpunit) in every worktree and record failures. Report-only."
+ai_description = "Ensure the local Docker stack is running (`dk start`) if the tests need services. For each repository worktree, two runs: the unit tests with the host PHP from inside the repo directory (`vendor/bin/bb-phpunit` or `vendor/bin/phpunit tests/Unit`), and the integration tests (tests/Integration, where present) inside the service's fpm container, because the worktree's .env names the container hostnames (mariadb, elasticsearch, mongo) that do not resolve on the host: `docker exec basebuilder-stack-<service>-fpm-1 php vendor/bin/phpunit tests/Integration`, container name from `docker ps`. Record the outcome per repository and per run — failing, skipped, or incomplete tests with their names and messages — in this task's result; a clean pass is also recorded. Do not fix, delete, or weaken any test: a failure here is a review finding for the consolidation task. A connection error is not a finding against the colleague's code but a broken environment: fix the environment and run again. This task fails only if the suite itself cannot run."
+actor = "agent"
+max_attempts = 0
+order = 2
+model = "haiku"
+
+[[phases.tasks]]
+name = "CI status on the pull requests"
+description = "Check the CI pipeline status on each pull request under review and record it."
+ai_description = "For each PR recorded at intake, check the Bitbucket pipeline status. Record per PR: green, red (naming the failing step), or still running. Do not re-run pipelines and do not push anything. A red pipeline is a review finding for the consolidation task."
+actor = "agent"
+max_attempts = 0
+order = 3
+model = "haiku"
+
+[[phases.tasks]]
+name = "Documentation check"
+description = "Confirm the documentation the colleague's change should have updated was actually updated, by comparing the diff against the docs. Report-only."
+ai_description = "Read the full diff of each PR (all commits since the branch diverged from its base), across every repository in scope. For each change that alters documented behavior — a route or query parameter added/renamed/removed, a public API shape, a CSS class or design-system catalogue entry, an architectural decision, a feature added or removed, a config option — confirm the matching documentation was updated in the same set of commits. Check each touched repo's own docs: its architecture document (docs/architecture.md or docs/architecture/architecture.md — check which the repo actually uses), README, API docs, and any other docs referenced by that repo's AGENTS.md. Put the change-to-documentation mapping in this task's result, one line per changed surface, citing the doc file and section. Any undocumented change is a review finding for the consolidation task — do not write the missing documentation yourself."
+actor = "agent"
+max_attempts = 0
+order = 4
+model = "sonnet"
+
+[[phases.tasks]]
+name = "Package check"
+description = "Run the package check on the colleague's repositories, report-only."
+ai_description = "Run the /package-check skill in each review worktree. The check itself changes nothing, which is why it fits this report-only ticket: never apply an update, never edit a lockfile, never commit on the colleague's branches. Every finding — reachable fixes included — goes into the review report as draft feedback for the colleague."
+actor = "agent"
+max_attempts = 0
+order = 5
+
+[[phases.tasks]]
+name = "Pre-merge checklist"
+description = "Work through .claude/commands/pre-merge-check.md item by item against the colleague's branches. Report-only."
+ai_description = "Open .claude/commands/pre-merge-check.md in the basebuilder-stack repo, go through every rule against the colleague's branches, and record each item's outcome in this task's result. Where the checklist references rules from the architecture document, check against those too. A failed item is a review finding for the consolidation task — do not fix it."
+actor = "agent"
+max_attempts = 0
+order = 6
+model = "sonnet"
+
+[[phases]]
+name = "AI Review"
+description = "The AI reviews, all report-only: requirements traceability, a fresh-context code review, the Gemini briefing, the CodeRabbit CLI workspace review, the Ponytail over-engineering review, and a triage of the CodeRabbit comments already on the PR."
+ai_description = "Run these tasks in order, once each, report-only. Review only the code changed by the colleague's ticket — the diff of each branch against its base; pre-existing issues on the base branch are out of scope. Never fix a finding — record it for the consolidation task. Never post anything to the PR or Jira."
+order = 4
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Requirements traceability"
+description = "Confirm every requirement entity captured at intake is met by the colleague's code."
+ai_description = "For each requirement entity on this ticket, find the code and tests in the colleague's branches that satisfy it and confirm it is actually met. Put the requirement-to-code mapping in this task's result. For each requirement, call tm_requirement_set with the requirement's id and verification set to \"met\" if the code fully satisfies it, \"unmet\" if it does not, or leave it \"unverified\" only if you genuinely cannot determine the outcome (rare — explain why in the result). Do this for every requirement, not just the ones that fail. An unmet requirement is a review finding for the consolidation task — record it, fix nothing."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "sonnet"
+
+[[phases.tasks]]
+name = "Test coverage"
+description = "Confirm the colleague's tests cover every requirement, or for a bug-fix ticket that a test reproduces the bug. Report-only."
+ai_description = "For each requirement entity on this ticket, find the test in the colleague's branches that proves it and confirm the test actually exercises that behaviour, not just that the code exists. For a bug-fix ticket, confirm a test reproduces the original bug and would fail without the fix. Record per requirement (or the bug) the covering test, or \"no test\" where none exists, in this task's result. A missing or inadequate test is a review finding for the consolidation task — record it, fix nothing."
+actor = "agent"
+max_attempts = 0
+order = 2
+model = "sonnet"
+
+[[phases.tasks]]
+name = "AI code review"
+description = "A fresh-context AI reviews the complete diff of the colleague's change against the architecture, conventions, and requirements, and records findings by severity. Report-only."
+ai_description = "Run a clean-context code review over the complete set of changes in the PRs (the diff of each branch against its base). Read AGENTS.md, CLAUDE.md, and the repo's architecture document first. Review what the mechanical checks cannot: correctness and subtle bugs, adherence to the documented architecture and conventions, readability, maintainability, and test quality. Judge only the code changed by this ticket's diff — pre-existing issues on the base branch are out of scope. If the diff adds or changes a pointerdown/pointerup/click/mousedown/touch listener on an interactive element, check whether it needs to (and does) branch on event.pointerType — pointer events fire identically for mouse, touch, and pen unless the code guards for it (BBDEV-2320); treat a missing gate as a finding. Write the findings grouped by severity into this task's result. Fix nothing."
+actor = "agent"
+max_attempts = 0
+order = 3
+model = "sonnet"
+
+[[phases.tasks]]
+name = "AI code review - Gemini"
+description = "Run /code-review-briefing to generate CODE_REVIEW.md in the ticket directory. This file is the input for an external Gemini code review. The task is done when CODE_REVIEW.md exists and covers all repositories in the workspace."
+ai_description = "Run the /code-review-briefing skill. It reads the active ticket from tm, collects the git diff for each repository in the workspace, adds surrounding context for significant changes, and writes CODE_REVIEW.md to the ticket directory. Confirm the file exists and is not empty before marking this task done. If the diff adds or changes a pointerdown/pointerup/click/mousedown/touch listener on an interactive element, call this out explicitly in CODE_REVIEW.md's context notes — whether it branches on event.pointerType where mouse and touch must behave differently — so the external Gemini reviewer's attention is drawn to it (BBDEV-2320 shipped broken on touch because nothing flagged this). Do not send the file anywhere — the user handles the Gemini review step externally."
+actor = "agent"
+max_attempts = 0
+order = 4
+model = "haiku"
+
+[[phases.tasks]]
+name = "AI code review - CodeRabbit CLI"
+description = "Run /code-review-workspace to run a CodeRabbit (Flappie) review across all repositories in the ticket workspace, then read and triage every finding. Report-only — the output goes to CODERABBIT_REVIEW.md and the confirmed findings to the consolidation task."
+ai_description = "Run the /code-review-workspace skill. It finds all repositories under the ticket's workspace, runs the coderabbit:code-reviewer agent against each one, and writes CODERABBIT_REVIEW.md to the ticket directory. Read every finding and triage it: confirmed (a real issue in the colleague's change), noise (false positive — say why), or out of scope (pre-existing on the base branch). Fix nothing and commit nothing — confirmed findings go to the consolidation task via this task's result. Additionally, independently of what CodeRabbit flags: if the diff adds or changes a pointerdown/pointerup/click/mousedown/touch listener on an interactive element, check whether it branches on event.pointerType where mouse and touch must behave differently (BBDEV-2320); treat a missing gate as a finding of your own even if CodeRabbit did not surface it."
+actor = "agent"
+max_attempts = 0
+order = 5
+model = "sonnet"
+
+[[phases.tasks]]
+name = "AI code review - Ponytail"
+description = "Run the Ponytail over-engineering review against the colleague's changes: what to delete, simplify, or replace with a standard-library or native equivalent. Scoped to the diff, not the full repositories. Report-only."
+ai_description = "Run the ponytail:ponytail-review skill against the changes under review — the diff of each PR branch against its base, for every repository in scope. Do not review whole repositories; only the changed code is in scope. Ponytail hunts complexity, not correctness: reinvented standard library, unneeded dependencies, speculative abstractions, dead flexibility — one line per finding with location, what to cut, and what replaces it. Record the findings in this task's result for the consolidation task, marking any you judge to be noise or intentional design. Fix nothing — this is a colleague's code; each confirmed finding becomes review feedback."
+actor = "agent"
+max_attempts = 0
+order = 6
+model = "sonnet"
+
+[[phases.tasks]]
+name = "Triage the CodeRabbit PR comments"
+description = "Read the CodeRabbit (Flappie) comments already posted on the colleague's pull requests, plus the reply threads, and triage them into the review findings. Report-only."
+ai_description = "Open each pull request on Bitbucket and read every CodeRabbit comment and its reply thread. For each: is it a real issue, already addressed by the colleague, disputed, or noise? Record the triage in this task's result so the consolidation task can fold it in — the user should not repeat feedback Flappie already gave, but an unresolved Critical or High Flappie finding belongs in the review verdict. Post nothing."
+actor = "agent"
+max_attempts = 0
+order = 7
+model = "sonnet"
+
+[[phases]]
+name = "Consolidation"
+description = "Merge every finding from the checks and reviews into one review report with draft PR comments, ready for the user to read, edit, and post."
+ai_description = "One task: gather all findings from the Automated checks and AI Review task results, dedupe, rank by severity, and produce the report and draft comments. Nothing is posted from here."
+order = 5
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Consolidate findings into the review report"
+description = "Merge and dedupe all findings from the automated checks and AI reviews into one report, grouped by severity, and draft the PR comments the user can post."
+ai_description = "Read the results of every task in the Automated checks and AI Review phases (tm_task_list plus tm_task_show on this ticket), plus CODERABBIT_REVIEW.md and — if the user has placed Gemini's findings in the ticket directory — those too. Merge and dedupe: one entry per real issue, citing file and line, grouped Critical / High / Medium / Low, each naming which source(s) found it. Leave noise and out-of-scope items out of the main list, but list them briefly at the end with the reason. Note requirements marked unmet prominently at the top. Write the report to REVIEW_REPORT.md in the ticket directory. Below the findings, draft ready-to-post PR comments in the user's plain, direct voice — one per finding that deserves a comment, plus a short overall verdict comment with its reasoning. The user reads, edits, and posts these himself: post nothing to Bitbucket or Jira."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "sonnet"
+
+[[phases]]
+name = "Human review and feedback"
+description = "The user's own code review and the delivery of the feedback to the colleague. These tasks are for the user — the AI does not complete them."
+ai_description = "Leave both tasks for the user; do not mark them done on his behalf. Never post review comments and never transition Jira — in this workflow the author merges after approval; the reviewer only reviews."
+order = 6
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Human code review"
+description = "The user reviews the colleague's code on the Bitbucket PR with REVIEW_REPORT.md at hand. This task is for the user — the AI does not complete it."
+ai_description = "Do not mark this task done — it is the user's own review. When he is ready to start, run `/human-code-review REVIEW_REPORT.md`. Passing the report makes the command annotate the code with the findings on a temporary local branch, and since this is a colleague's code the command collects the user's comments as draft PR feedback in REVIEW_REPORT.md instead of fixing and committing. He may instead work from the Bitbucket pull request and the consolidated REVIEW_REPORT.md directly, opening files in the IDE as needed."
+actor = "human"
+max_attempts = 0
+order = 1
+
+[[phases.tasks]]
+name = "Deliver the feedback"
+description = "The user posts the review comments and his verdict on the pull request. This task is for the user — the AI does not complete it."
+ai_description = "Do not mark this task done and do not post anything — posting review feedback on a colleague's PR is the user's outward-facing act. He edits the draft comments from REVIEW_REPORT.md and posts them himself, along with his verdict on the PR. Jira transitions, if any, are also his call."
+actor = "human"
+max_attempts = 0
+order = 2

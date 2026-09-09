@@ -1,0 +1,116 @@
+description = "Template for functionally testing a colleague's feature: check their branches out read-only, run the local stack on their code with a Docker override, drive the feature end to end with Playwright (including the touch-parity pass), and hand the user a findings report plus a running application for his own hands-on test. Report-only — no fixes, no commits, no pushes. For a code review, use the code review template."
+ai_description = "Work the phases in order. This ticket tests a COLLEAGUE's feature: everything is report-only on the colleague's code — never modify tracked source, commit, or push on their branches, never post to the PR or Jira. Editing disposable local dev config (a .env or similar) inside the ticket workspace IS allowed when it is needed to run the branch and make the fix observable — that is local test setup, not the colleague's code; never commit it and never touch tracked files. Intake captures the scope (Jira ticket, repos, branches, PRs) and the requirements as requirement entities. Setup checks the branches out read-only in worktrees, creates the Docker override, and starts the stack on the colleague's code. The AI functional test drives the feature end to end against the requirements and records per-requirement verdicts. Consolidation turns the findings into a report with draft feedback. The user then tests the feature himself and delivers the feedback."
+
+[[phases]]
+name = "Intake"
+description = "Capture what is being tested: the colleague's Jira ticket, the repositories and branches, the pull requests — and the requirements the feature must meet, as requirement entities on this ticket."
+ai_description = "Read-only intake. Ask the user for the colleague's Jira ticket key and/or PR links if they were not provided. Never transition or comment on Jira; never post on the PRs."
+order = 1
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Capture the test subject and requirements"
+description = "Read the colleague's Jira ticket and pull requests, record the scope (repositories, branches, PR links), and capture each requirement the feature must meet as a requirement entity on this ticket."
+ai_description = "Inputs from the user: the colleague's Jira ticket key and/or the Bitbucket PR links, plus what the colleague asked to have tested. Read the Jira ticket (description, acceptance criteria, comments) via the Jira MCP tools — read-only, never transition or comment. Open each pull request and record: repository, source branch, target branch, PR link, and a one-line summary of what the PR changes. Capture each behaviour the feature is supposed to show as a requirement entity via tm_requirement_add — discrete, individually verifiable statements, phrased from the Jira ticket's own text and the colleague's test request, not invented; if these are too thin to yield requirements, record that and ask the user rather than inventing them. Record the full scope (repos, branches, PR links, requirement count) in this task's result. If the Jira ticket or PRs cannot be found, stop and ask the user rather than guessing."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "sonnet"
+
+[[phases]]
+name = "Setup"
+description = "Check the colleague's branches out read-only, create the Docker override, and start the local stack on the colleague's code. No new branches, no commits, no pushes."
+ai_description = "This workspace exists to run the colleague's feature. Never commit or push from these worktrees — they hold a colleague's branch, not ours."
+order = 2
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Update affected repositories"
+description = "For every repository in the test scope, make its main clone current: confirm it is on its default branch (main/master) with no uncommitted changes, then fetch and fast-forward it to origin. Never leave a main clone on a feature branch."
+ai_description = "For each repository recorded at intake, operate on the MAIN clone (not a worktree): run git fetch; confirm the clone is on its default branch (main or master) and has no uncommitted changes; then fast-forward it to origin/<default>. Do NOT push. Do NOT switch branches as normal operation. If a clone is on a feature branch, has uncommitted changes, or cannot fast-forward because the local branch has diverged, do not force anything — stop and flag it to the user. Record, per repository, the branch and the before/after commit in this task's result."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "haiku"
+
+[[phases.tasks]]
+name = "Create review worktrees"
+description = "For every repository in the test scope, create a worktree in the ticket directory checked out on the colleague's existing feature branch, and prepare it to run (composer install, copy .env). Never push, never commit."
+ai_description = "Create the ticket directory following the project's convention (tickets/feature/BBDEV-XXXX-<slug>/, using the colleague's Jira key). For each repository in scope:\n1. git -C <main-clone> fetch\n2. git -C <main-clone> worktree add <ticket-dir>/<repo> <colleague-branch> — this creates a local branch tracking origin/<colleague-branch>; the main clone stays on its default branch.\n3. git -C <worktree> branch -vv — confirm it tracks the colleague's origin branch.\n4. composer install in the worktree, so the service can run from it.\n5. If the main clone has a .env, copy it into the worktree (cp <main-clone>/.env <worktree>/.env).\nNEVER push and NEVER commit from these worktrees — this is a read-only checkout of a colleague's branch. Record each worktree path and its tracking line in this task's result."
+actor = "agent"
+max_attempts = 0
+order = 2
+model = "haiku"
+
+[[phases.tasks]]
+name = "Create the Docker override"
+description = "Create docker-compose.override.yaml in the ticket directory, remapping each affected service's volume mounts to the colleague's worktree, so the branch can be started for the verify step. Colleagues do not use worktrees or Docker overrides, so their branch never brings one — always create it fresh here, never commit it. The stack itself is started later, per functional step (master for the reproduce baseline, the branch via this override for the verify step)."
+ai_description = "Colleagues do not work with worktrees, ticket workspaces, or docker-compose overrides — those are this user's own local workflow, so the colleague's branch never contains an override. Always create it here, locally, and never commit it.\n\nCreate tickets/feature/BBDEV-XXXX-<slug>/docker-compose.override.yaml. For each affected service, remap its volume mounts from basebuilder-stack/services/<svc> to that service's review worktree (path ../tickets/feature/BBDEV-XXXX-<slug>/workspace/<svc>:/code, matching the stack convention). Record which services you remapped in this task's result.\n\nDo NOT start the stack here. The Functional test phase starts it per step: plain `dk start` on master for the reproduce baseline, then `dk stop && dkstart <ticket-number>` with this override for the verify step."
+actor = "agent"
+max_attempts = 0
+order = 3
+model = "sonnet"
+
+[[phases]]
+name = "Functional test"
+description = "The AI drives the colleague's feature end to end against the requirements — UI in a real browser with mouse and touch, API endpoints directly — and records per-requirement verdicts. Report-only."
+ai_description = "Run once, report-only. A functional failure is a finding for the consolidation task, never something to fix on the colleague's branch. Leave the application running afterwards for the user's own test."
+order = 3
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Reproduce the problem on master (baseline)"
+description = "Before testing the fix, establish the baseline: run the current master and reproduce the reported problem, so the fix is judged against a problem actually seen — not merely \"it works now\". For a bug fix, reproduce the bug; for a new feature with no pre-existing problem, record that reproduction is not applicable and why, then proceed."
+ai_description = "This step runs on MASTER, not the colleague's branch — the point is to see the problem first, so the verify step has a real \"before\" to compare against.\n\nBring the stack up on master with the base compose and NO ticket override: `dk start` (if a stack is already running on a branch, `dk stop` first). The main clones serve master, so the affected services run the current released code.\n\nFollow the ticket's own test plan / reproduction steps to trigger the reported problem, and record exactly what you observe as the baseline: the error, the wrong state, the relevant logs — for example the queue row's state, the Rollbar / Elasticsearch errors, or the crash. Be concrete; this \"before\" state is what the verify step compares against.\n\nIf the ticket is a new feature with no pre-existing problem to reproduce, do NOT invent one: record that reproduction is not applicable and why (the feature does not exist on master), and proceed to the verify step.\n\nReport-only — never modify, commit, or push. Put the observed baseline in this task's result."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "sonnet"
+
+[[phases.tasks]]
+name = "Verify the fix on the branch"
+description = "Run the colleague's branch and confirm the problem seen in the master baseline is resolved (or, for a new feature, that it works), driving the feature end to end against the requirements and comparing against the baseline. Report-only; leave the application running."
+ai_description = "Bring the stack up on the colleague's branch via the ticket's docker override: if master is still running from the reproduce step, `dk stop` first, then `dkstart <ticket-number>` so the affected services serve the worktree code.\n\nFirst, close the before/after loop: repeat the EXACT steps from the reproduce step and confirm the problem is gone — the error no longer occurs, the state is correct, the logs are clean. Cite the concrete after-state against the before-state the baseline recorded (e.g. the queue row now finalizes at status done/response error with no retry chain; no new Rollbar/Elasticsearch errors). If the reproduce step recorded that reproduction was not applicable (new feature), there is no baseline to compare — just verify the feature works.\n\nThen exercise the feature end to end against the requirement entities on the ticket: drive the UI in a real browser with Playwright, and call REST endpoints directly where exposed. If the diff touches a pointerdown/pointerup/click/touch handler, exercise it twice — once with normal mouse interaction and once with Playwright touch emulation (hasTouch: true, isMobile: true, page.tap()) — pointer events fire identically for mouse and touch unless the code branches on event.pointerType (BBDEV-2320). For each requirement entity set verification via tm_requirement_set: met / unmet (or unverified with the reason).\n\nIf a functional check needs local dev configuration the dev environment lacks (for example a variable that exists in production but not in the dev .env), you MAY edit the local dev config files (.env and similar) inside the ticket workspace to make the branch runnable and the fix observable — this is disposable local test setup, not the colleague's code; never edit tracked source, never commit, never push. Fix nothing in the colleague's code itself — a functional failure is a finding for the consolidation task, recorded with its reproduction steps. Leave the application running on the branch when you finish so the user's own hands-on test can start immediately."
+actor = "agent"
+max_attempts = 0
+order = 2
+model = "sonnet"
+
+[[phases]]
+name = "Consolidation"
+description = "Merge the functional findings into one test report with draft feedback for the colleague, ready for the user to read, edit, and send."
+ai_description = "One task: turn the functional test's result and the requirement verdicts into the report and draft feedback. Nothing is posted from here."
+order = 4
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Consolidate findings into the test report"
+description = "Merge the functional findings into one report with draft feedback for the colleague, ready for the user to read, edit, and send."
+ai_description = "Read the AI functional test's result and the requirement verdicts on this ticket. Write TEST_REPORT.md in the ticket directory: per requirement its verdict and the evidence, each functional failure with exact reproduction steps (URL, actions, expected vs actual), and the touch-parity outcome where exercised. Below the findings, draft the feedback message for the colleague in the user's plain, direct voice. The user sends it himself: post nothing to Bitbucket or Jira."
+actor = "agent"
+max_attempts = 0
+order = 1
+model = "sonnet"
+
+[[phases]]
+name = "Human test and feedback"
+description = "The user's own hands-on test and the delivery of the feedback to the colleague. These tasks are for the user — the AI does not complete them."
+ai_description = "Leave both tasks for the user; do not mark them done on his behalf. Never post feedback and never transition Jira on his behalf."
+order = 5
+max_attempts = 0
+
+[[phases.tasks]]
+name = "Human functional test"
+description = "The user tries the feature himself. The application is already running on the colleague's code. This task is for the user — the AI does not complete it."
+ai_description = "Do not mark this task done — it is the user's hands-on check. The stack is already running on the colleague's worktrees from the AI functional test; he opens the feature in a browser and tries it, with TEST_REPORT.md at hand."
+actor = "human"
+max_attempts = 0
+order = 1
+
+[[phases.tasks]]
+name = "Deliver the feedback"
+description = "The user sends the test feedback to the colleague. This task is for the user — the AI does not complete it."
+ai_description = "Do not mark this task done and do not send anything — delivering test feedback is the user's outward-facing act. He edits the draft from TEST_REPORT.md and sends or posts it himself; any PR verdict or Jira transition is also his call."
+actor = "human"
+max_attempts = 0
+order = 2
