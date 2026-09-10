@@ -70,4 +70,18 @@ final class GrindToolTest extends TestCase
         $this->assertStringContainsString('An ordinary task\'s own failure stops its ticket (req 513)', $protocol);
         $this->assertStringContainsString('This bullet does not apply inside a §7 pass or a §8 run', $protocol);
     }
+    #[Test]
+    public function budget_exhaustion_continues_the_run_and_later_passes_confirm_prior_repairs(): void
+    {
+        // ticket 301 (reqs 768-770): the repair threshold, the delta-scoped
+        // confirming pass, and exhaustion-continues. Text-only regression — this
+        // protocol is instructions for an agent, not executable logic.
+        $protocol = new GrindTool()->protocol();
+
+        $this->assertStringContainsString('repair threshold', $protocol);
+        $this->assertStringContainsString("confirm the previous round's repairs, nothing else", $protocol);
+        $this->assertStringContainsString('unconfirmed-repair `check` question', $protocol);
+        $this->assertStringContainsString('Do not stop the ticket and do not mark anything `failed`', $protocol);
+        $this->assertStringNotContainsString('exhausted max_attempts (<max_attempts>) — see dashboard', $protocol);
+    }
 }
