@@ -70,6 +70,9 @@ final class McpServer
         no workflow rules of its own on top of ai-lib; any valid status is reachable
         from any other.
 
+        Set the status of tasks only. The status of a phase, a ticket, and a project
+        rolls up from the tasks inside it, so never set those by hand.
+
         The planning shape mirrors the hierarchy: features are tickets, milestones
         inside a feature are phases, and the concrete steps inside a milestone are
         tasks; long-form intent goes in the description and ai_description fields,
