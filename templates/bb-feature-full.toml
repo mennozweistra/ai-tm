@@ -375,12 +375,13 @@ order = 8
 max_attempts = 0
 
 [[phases.tasks]]
-name = "Merge main-branch updates into all feature branches and update lockfiles (Claude does it on Menno's go-ahead)"
-description = "Claude brings every feature branch up to date with the latest base branch and refreshes its lockfiles. The task is marked human only so an unattended run stops here: it pushes, so Claude does it after Menno's explicit go-ahead. It comes before the final commit and push, which checks the result."
-ai_description = "For each repository's worktree involved in the ticket: fetch and merge the current main/master into the feature branch, resolve any conflicts, and update the lockfiles (composer.lock through bb-composer from the service worktree, pnpm-lock.yaml with pnpm) so the branch builds against current dependencies. For a ticket that touched bb-service-shared, also make the branch ready to share — repoint the committed composer.json at a real shared-library git ref rather than the local path repo, re-lock with bb-composer (see basebuilder-stack docs/basebuilder-workflow.md \"Make the branch ready to share\"), commit the composer files, then restore the local dev config. Push each updated branch. This step changes shared state and needs a git push, so do it only on the user's explicit go-ahead — never unprompted."
-actor = "human"
+name = "Merge main-branch updates into all feature branches and update lockfiles"
+description = "Bring every feature branch up to date with the latest base branch and refresh its lockfiles. It comes before the final commit and push, which checks the result."
+ai_description = "For each repository's worktree involved in the ticket: fetch and merge the current main/master into the feature branch, resolve any conflicts, and update the lockfiles (composer.lock through bb-composer from the service worktree, pnpm-lock.yaml with pnpm) so the branch builds against current dependencies. For a ticket that touched bb-service-shared, also make the branch ready to share — repoint the committed composer.json at a real shared-library git ref rather than the local path repo, re-lock with bb-composer (see basebuilder-stack docs/basebuilder-workflow.md \"Make the branch ready to share\"), commit the composer files, then restore the local dev config. Push each updated feature branch with a plain `git push`. Never merge into master or main, never force-push, never tag."
+actor = "agent"
 max_attempts = 0
 order = 1
+model = "sonnet"
 
 [[phases.tasks]]
 name = "Environment variables to share"

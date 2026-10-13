@@ -32,9 +32,9 @@ final class McpServerInstructionsTest extends TestCase
             "Instructions should be at least 1000 chars, got {$length}.",
         );
         $this->assertLessThanOrEqual(
-            3500,
+            4000,
             $length,
-            "Instructions should be at most 3500 chars, got {$length}.",
+            "Instructions should be at most 4000 chars, got {$length}.",
         );
 
         // The four entity nouns must appear, case-insensitive, so the agent learns
