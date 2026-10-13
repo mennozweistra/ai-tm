@@ -87,8 +87,8 @@ model = "sonnet"
 
 [[phases.tasks]]
 name = "Package check"
-description = "Run the package check on the colleague's repositories, report-only."
-ai_description = "Run the /package-check skill in each review worktree. The check itself changes nothing, which is why it fits this report-only ticket: never apply an update, never edit a lockfile, never commit on the colleague's branches. Every finding — reachable fixes included — goes into the review report as draft feedback for the colleague."
+description = "Run the package check on the colleague's repositories, report-only, and save one report per repository in the ticket directory, so the reports are ready when Menno does the human code review."
+ai_description = "Run the /package-check command in each review worktree, one run per repository. The check itself changes nothing, which is why it fits this report-only ticket: never apply an update, never edit a lockfile, never commit on the colleague's branches. Every finding — reachable fixes included — goes into the review report as draft feedback for the colleague.\n\nREPORTS. Deliver each report as a file instead of opening it: write the full HTML page that /package-check produces to <ticket directory>/package-check/package-check-<repository>-<YYYY-MM-DD>.html. The ticket directory is the folder that holds this ticket's workspace/ folder. Create the package-check folder when it does not exist. Do not open a browser window, because nobody may be watching, and never write a report into a repository. Put each repository's verdict and What to do paragraph in this task's result. The human task \"Review the package check reports\" in Human review and feedback reads these files."
 actor = "agent"
 max_attempts = 0
 order = 5
@@ -205,12 +205,20 @@ order = 6
 max_attempts = 0
 
 [[phases.tasks]]
+name = "Review the package check reports"
+description = "The Package check in Automated checks saved one HTML report per repository of the colleague's work in the ticket directory, in the package-check folder. Read them and decide which findings go into the feedback for the colleague."
+ai_description = "Do not mark this task done — it is the user's review. When the user starts it, list the report files in <ticket directory>/package-check/ (the folder that holds this ticket's workspace/ folder), open them with `open`, and give the verdict of each in plain words. Then go through the findings with the user, one at a time. A finding the user keeps goes into the review report as feedback for the colleague; a finding the user drops is recorded in this task's result. Never change the colleague's code or lockfiles."
+actor = "human"
+max_attempts = 0
+order = 1
+
+[[phases.tasks]]
 name = "Human code review"
 description = "The user reviews the colleague's code on the Bitbucket PR with REVIEW_REPORT.md at hand. This task is for the user — the AI does not complete it."
 ai_description = "Do not mark this task done — it is the user's own review. He reads REVIEW_REPORT.md finding by finding and decides per finding: keep, reword, or drop. Apply his edits to REVIEW_REPORT.md as he gives them, so the file is always the text that goes to the colleague. When he wants the findings shown in the code, run `/human-code-review REVIEW_REPORT.md`, which annotates the code on a temporary local branch. He may instead work from the Bitbucket pull request and the report directly, opening files in the IDE as needed."
 actor = "human"
 max_attempts = 0
-order = 1
+order = 2
 
 [[phases.tasks]]
 name = "Deliver the feedback"
@@ -218,4 +226,4 @@ description = "The user delivers the review feedback on the pull request, with h
 ai_description = "Do not mark this task done and do not post anything on your own initiative — review feedback on a colleague's PR is the user's outward-facing act. The user chooses the form: for a small review, inline PR comments on the code lines, one per finding, drafted from REVIEW_REPORT.md; for a large review, the whole report as ONE general comment on the PR (not attached to a code line). Both in markdown, each comment starting with the line `_Written by Claude at Menno's request._`. Post only what he says to post, when he says so. Never edit a posted comment afterwards unless he asks; then fetch the latest version first, apply the change to it, and save. His verdict on the PR (approve, request changes) and Jira transitions are his alone."
 actor = "human"
 max_attempts = 0
-order = 2
+order = 3

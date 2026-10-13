@@ -219,15 +219,15 @@ model = "sonnet"
 [[phases.tasks]]
 name = "Refresh roave/security-advisories"
 description = "Re-pin the roave/security-advisories guard so composer update refuses versions whose problems are known up to today."
-ai_description = "For every PHP worktree of this ticket (composer.json present), run `composer update roave/security-advisories` and commit the lockfile change on the feature branch. The package holds no code, only a conflict list, so nothing else changes. If the update fails, a version already in the lockfile is on the new advisory list — name that package and stop; the failure is itself a finding. If a repository does not carry roave/security-advisories in require-dev, record that as a finding instead of adding it silently. Skip repositories without composer.json."
+ai_description = "For every PHP worktree of this ticket (composer.json present), run `bb-composer update roave/security-advisories` from the worktree directory and commit the lockfile change on the feature branch. Composer runs only through bb-composer for a stack service (docs/composer.md), never the host composer and never with --ignore-platform-reqs; a repository without a php-fpm tag in bitbucket-pipelines.yml falls back to the host composer by itself. The package holds no code, only a conflict list, so nothing else changes. If the update fails, a version already in the lockfile is on the new advisory list — name that package and stop; the failure is itself a finding. If a repository does not carry roave/security-advisories in require-dev, record that as a finding instead of adding it silently. Skip repositories without composer.json."
 actor = "agent"
 max_attempts = 0
 order = 9
 
 [[phases.tasks]]
 name = "Package check"
-description = "Run the package check on every repository the ticket touches."
-ai_description = "Run the /package-check skill in each worktree of this ticket. Where the report says a plain lockfile refresh reaches a fix, apply it, verify with the quality checks and the test suite, and commit on the feature branch. Where a fix is blocked by a constraint, has no released fix, or needs a decision, store a question instead of acting. This task runs before the pre-merge checklist so the checklist judges the final dependency state."
+description = "Run the package check on every repository the ticket touches, and save one report per repository in the ticket directory, so the reports are ready when Menno reviews them in Human Review."
+ai_description = "Run the /package-check command in each worktree of this ticket, one run per repository. Where the report says a plain lockfile refresh reaches a fix, apply it with bb-composer from the worktree directory (never the host composer, docs/composer.md), verify with the quality checks and the test suite, and commit on the feature branch. Where a fix is blocked by a constraint, has no released fix, or needs a decision, store a question instead of acting. This task runs before the pre-merge checklist so the checklist judges the final dependency state.\n\nREPORTS. Deliver each report as a file instead of opening it: write the full HTML page that /package-check produces to <ticket directory>/package-check/package-check-<repository>-<YYYY-MM-DD>.html. The ticket directory is the folder that holds this ticket's workspace/ folder. Create the package-check folder when it does not exist. Do not open a browser window, because nobody may be watching, and never write a report into a repository. Put each repository's verdict and What to do paragraph in this task's result. The human task \"Review the package check reports\" in Human Review reads these files."
 actor = "agent"
 max_attempts = 0
 order = 10
@@ -328,12 +328,20 @@ order = 7
 max_attempts = 0
 
 [[phases.tasks]]
+name = "Review the package check reports"
+description = "The Package check in QA saved one HTML report per repository in the ticket directory, in the package-check folder. Read them, decide on every finding that is not fixed yet, and record what stays out of scope."
+ai_description = "Do not mark this task done — it is the user's review. When the user starts it, list the report files in <ticket directory>/package-check/ (the folder that holds this ticket's workspace/ folder), open them with `open`, and give the verdict of each in plain words. Then go through the findings that are not fixed yet with the user, one at a time. A finding the user decides to fix becomes an Implementation task; a finding the user leaves out of scope is recorded in this task's result."
+actor = "human"
+max_attempts = 0
+order = 1
+
+[[phases.tasks]]
 name = "Human functional review"
 description = "The user runs the feature and confirms it does what was requested and feels right. This task is for the user — the AI does not complete it."
 ai_description = "Do not mark this task done — it is the user's hands-on check that the feature works and matches intent. For a user interface the user opens it in a browser; for an API the user exercises the endpoints. The application should already be running from the AI functional review. Leave this task for the user."
 actor = "human"
 max_attempts = 0
-order = 1
+order = 2
 
 [[phases.tasks]]
 name = "Human code review"
@@ -341,7 +349,7 @@ description = "The user reviews the implemented code. This task is for the user 
 ai_description = "Do not mark this task done — it is the user's review of the code. When the user is ready to start, run the /human-code-review command: it opens a frozen side-by-side diff page per repository in his browser, records his spoken comments verbatim in a numbered list, answers discussion inline, fixes and commits each accepted comment locally, and moves to the next repository only on his say-so. He may instead review on the Bitbucket pull request or in the IDE if he prefers. He approves the PR when satisfied. Leave the task's completion to him."
 actor = "human"
 max_attempts = 0
-order = 2
+order = 3
 
 [[phases.tasks]]
 name = "Colleague code review"
@@ -349,7 +357,7 @@ description = "A colleague reviews the implemented code. This task is for a coll
 ai_description = "Do not mark this task done — it is a colleague's review of the code. Leave it for the colleague. The pull request on Bitbucket is the primary review surface."
 actor = "human"
 max_attempts = 0
-order = 3
+order = 4
 
 [[phases.tasks]]
 name = "Colleague functional test"
@@ -357,7 +365,7 @@ description = "A colleague runs the feature and confirms it works as expected. T
 ai_description = "Do not mark this task done — it is a colleague's hands-on check that the feature works. Leave it for the colleague."
 actor = "human"
 max_attempts = 0
-order = 4
+order = 5
 
 [[phases]]
 name = "Release"

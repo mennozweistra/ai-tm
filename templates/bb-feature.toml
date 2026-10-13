@@ -176,8 +176,8 @@ order = 2
 
 [[phases]]
 name = "Improvement rounds"
-description = "These checks run after Menno's review and before the merge. Each check has one trigger, stated in the first sentence of its own description, and runs only when that trigger fired. A finding is handled like a change request: it becomes an Implementation task, the Gate re-runs, and Menno re-reads the diff briefly when the fix is more than mechanical."
-ai_description = "For each task in this phase, first evaluate the task's trigger against the ticket's diff and Menno's review notes. When the trigger did not fire, set the task to status \"skipped\" with tm_task_set, give a one-line reason in the result, and stop; do not run the check. When the trigger fired, run the check exactly as the task's own text describes it.\n\nA finding from a check that fired is handled like a change request from Menno: create an Implementation task for it with tm_task_add, let the Gate re-run, and ask Menno for a short re-read of the diff when the fix is more than mechanical. A purely mechanical fix (a lockfile refresh, a dead-code deletion, a documentation correction) needs no re-read.\n\nRoute anything the check cannot resolve itself as a question via tm_question_add (kind 'ask' for a user call, 'check' for a decision already taken), passing the ticket id, the task's id as `task`, and the model you are running as `model`, each self-contained for a cold reader with your recommendation."
+description = "These checks run after Menno's review and before the merge. Each check except the Package check has one trigger, stated in the first sentence of its own description, and runs only when that trigger fired. The Package check runs on every ticket. A finding is handled like a change request: it becomes an Implementation task, the Gate re-runs, and Menno re-reads the diff briefly when the fix is more than mechanical."
+ai_description = "For each task in this phase except the Package check, first evaluate the task's trigger against the ticket's diff and Menno's review notes. When the trigger did not fire, set the task to status \"skipped\" with tm_task_set, give a one-line reason in the result, and stop; do not run the check. When the trigger fired, run the check exactly as the task's own text describes it. The Package check has no trigger and always runs.\n\nA finding from a check that fired is handled like a change request from Menno: create an Implementation task for it with tm_task_add, let the Gate re-run, and ask Menno for a short re-read of the diff when the fix is more than mechanical. A purely mechanical fix (a lockfile refresh, a dead-code deletion, a documentation correction) needs no re-read.\n\nRoute anything the check cannot resolve itself as a question via tm_question_add (kind 'ask' for a user call, 'check' for a decision already taken), passing the ticket id, the task's id as `task`, and the model you are running as `model`, each self-contained for a cold reader with your recommendation."
 order = 8
 max_attempts = 0
 
@@ -210,8 +210,8 @@ model = "sonnet"
 
 [[phases.tasks]]
 name = "Package check"
-description = "Trigger: composer.lock or package-lock.json changed in the diff. Two parts. First, re-pin the roave/security-advisories guard so composer update refuses versions whose problems are known up to today. Then run the package check on every repository the ticket touches."
-ai_description = "Evaluate the trigger first: composer.lock or package-lock.json changed in the diff. If no lockfile changed, set this task to status \"skipped\" with tm_task_set, give the one-line reason in the result, and stop. Otherwise run both parts below, in order.\n\nPART 1 — REFRESH ROAVE/SECURITY-ADVISORIES.\nFor every PHP worktree of this ticket (composer.json present), run `bb-composer update roave/security-advisories` from the worktree directory and commit the lockfile change on the feature branch. Composer runs only through bb-composer for a stack service (docs/composer.md); a repository without a php-fpm tag in bitbucket-pipelines.yml falls back to the host composer by itself. The package holds no code, only a conflict list, so nothing else changes. If the update fails, a version already in the lockfile is on the new advisory list — name that package and stop; the failure is itself a finding. If a repository does not carry roave/security-advisories in require-dev, record that as a finding instead of adding it silently. Skip repositories without composer.json.\n\nPART 2 — PACKAGE CHECK.\nRun the /package-check skill in each worktree of this ticket. Where the report says a plain lockfile refresh reaches a fix, apply it with bb-composer from the worktree directory (never the host composer, docs/composer.md), verify with the quality checks and the test suite, and commit on the feature branch. Where a fix is blocked by a constraint, has no released fix, or needs a decision, store a question instead of acting.\n\nAny lockfile this task commits changes the dependency state the Gate already judged, so re-run the Gate afterwards; the pre-merge checklist must judge the final dependency state."
+description = "Runs on every ticket. Two parts. First, re-pin the roave/security-advisories guard so composer update refuses versions whose problems are known up to today. Then run the package check on every repository the ticket touches, and save one report per repository in the ticket directory, so the reports are ready when Menno reviews them in Release preparation."
+ai_description = "This check always runs; it has no trigger. Run both parts below, in order.\n\nPART 1 — REFRESH ROAVE/SECURITY-ADVISORIES.\nFor every PHP worktree of this ticket (composer.json present), run `bb-composer update roave/security-advisories` from the worktree directory and commit the lockfile change on the feature branch. Composer runs only through bb-composer for a stack service (docs/composer.md); a repository without a php-fpm tag in bitbucket-pipelines.yml falls back to the host composer by itself. The package holds no code, only a conflict list, so nothing else changes. If the update fails, a version already in the lockfile is on the new advisory list — name that package and stop; the failure is itself a finding. If a repository does not carry roave/security-advisories in require-dev, record that as a finding instead of adding it silently. Skip repositories without composer.json.\n\nPART 2 — PACKAGE CHECK.\nRun the /package-check command in each worktree of this ticket, one run per repository. Where the report says a plain lockfile refresh reaches a fix, apply it with bb-composer from the worktree directory (never the host composer, docs/composer.md), verify with the quality checks and the test suite, and commit on the feature branch. Where a fix is blocked by a constraint, has no released fix, or needs a decision, store a question instead of acting.\n\nREPORTS. Deliver each report as a file instead of opening it: write the full HTML page that /package-check produces to <ticket directory>/package-check/package-check-<repository>-<YYYY-MM-DD>.html. The ticket directory is the folder that holds this ticket's workspace/ folder. Create the package-check folder when it does not exist. Do not open a browser window, because nobody may be watching, and never write a report into a repository. Put each repository's verdict and What to do paragraph in this task's result. The human task \"Review the package check reports\" in Release preparation reads these files.\n\nAny lockfile this task commits changes the dependency state the Gate already judged, so re-run the Gate afterwards; the pre-merge checklist must judge the final dependency state."
 actor = "agent"
 max_attempts = 0
 order = 4
@@ -233,12 +233,20 @@ order = 9
 max_attempts = 0
 
 [[phases.tasks]]
+name = "Review the package check reports"
+description = "The Package check in the Improvement rounds saved one HTML report per repository in the ticket directory, in the package-check folder. Read them, decide on every finding that is not fixed yet, and record what stays out of scope."
+ai_description = "Do not mark this task done — it is the user's review. When the user starts it, list the report files in <ticket directory>/package-check/ (the folder that holds this ticket's workspace/ folder), open them with `open`, and give the verdict of each in plain words. Then go through the findings that are not fixed yet with the user, one at a time. A finding the user decides to fix becomes an Implementation task; a finding the user leaves out of scope is recorded in this task's result."
+actor = "human"
+max_attempts = 0
+order = 1
+
+[[phases.tasks]]
 name = "Final commit and push"
 description = "Confirm everything is committed and the branch is pushed to the remote: the working tree is clean and nothing local is left behind."
 ai_description = "git status clean; all feature changes committed with messages naming the ticket; the branch pushed to the remote (origin). Always applies, every project."
 actor = "agent"
 max_attempts = 0
-order = 1
+order = 2
 model = "haiku"
 
 [[phases.tasks]]
@@ -247,7 +255,7 @@ description = "List the new or changed environment variables the feature needs, 
 ai_description = "Compile the list of environment variables this feature introduces or changes, each with a short note on what it is for, so the user can add them to the staging and production environments. Put the list in this task's result."
 actor = "agent"
 max_attempts = 0
-order = 2
+order = 3
 model = "haiku"
 
 [[phases.tasks]]
@@ -256,7 +264,7 @@ description = "Bring every feature branch up to date with the latest base branch
 ai_description = "For each repository's worktree involved in the ticket: fetch and merge the current main/master into the feature branch, resolve any conflicts, and update the lockfiles (composer.lock through bb-composer from the service worktree, pnpm-lock.yaml with pnpm) so the branch builds against current dependencies. For a ticket that touched bb-service-shared, also make the branch ready to share — repoint the committed composer.json at a real shared-library git ref rather than the local path repo, re-lock with bb-composer (see docs/workflow.md \"Make the branch ready to share\"), commit the composer files, then restore the local dev config. Push each updated branch. This step changes shared state and needs a git push, so do it only on the user's explicit go-ahead — never unprompted."
 actor = "human"
 max_attempts = 0
-order = 3
+order = 4
 
 [[phases]]
 name = "Colleague review"
