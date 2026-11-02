@@ -23,6 +23,7 @@ use AiToolset\AiLib\Domain\Exception\InvalidStatusException;
 use AiToolset\AiLib\Domain\Exception\InvalidTemplateException;
 use AiToolset\AiLib\Domain\Exception\InvalidVerificationException;
 use AiToolset\AiLib\Domain\Exception\NotFoundException;
+use AiToolset\AiLib\Domain\Models\Priority;
 
 abstract class BaseTools
 {
@@ -36,7 +37,23 @@ abstract class BaseTools
     /** @return array<string, mixed> */
     protected function success(mixed $data): array
     {
-        return ['ok' => true, 'data' => $this->serializer->serialize($data)];
+        return ['ok' => true, 'data' => $this->namePriorities($this->serializer->serialize($data))];
+    }
+
+    /** Priorities go in as names (low, medium, high), so they come out as names too. */
+    private function namePriorities(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+
+        $named = [];
+        foreach ($value as $key => $item) {
+            $priority = $key === 'priority' && is_int($item) ? Priority::tryFrom($item) : null;
+            $named[$key] = $priority instanceof Priority ? strtolower($priority->name) : $this->namePriorities($item);
+        }
+
+        return $named;
     }
 
     /** @return array<string, mixed> */

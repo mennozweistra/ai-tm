@@ -109,7 +109,7 @@ final class McpToolsTest extends BaseMcpTest
 
         $data = $this->data($this->ticketTools->add(project: 1, name: 't', priority: 'low', template: self::SCAFFOLD_TEMPLATE));
 
-        $this->assertSame(1, $data['priority']);
+        $this->assertSame('low', $data['priority']);
     }
 
     #[Test]
@@ -119,7 +119,7 @@ final class McpToolsTest extends BaseMcpTest
 
         $data = $this->data($this->ticketTools->add(project: 1, name: 't', priority: 'medium', template: self::SCAFFOLD_TEMPLATE));
 
-        $this->assertSame(2, $data['priority']);
+        $this->assertSame('medium', $data['priority']);
     }
 
     #[Test]
@@ -129,7 +129,7 @@ final class McpToolsTest extends BaseMcpTest
 
         $data = $this->data($this->ticketTools->add(project: 1, name: 't', priority: 'high', template: self::SCAFFOLD_TEMPLATE));
 
-        $this->assertSame(3, $data['priority']);
+        $this->assertSame('high', $data['priority']);
     }
 
     #[Test]
@@ -161,7 +161,7 @@ final class McpToolsTest extends BaseMcpTest
 
         $data = $this->data($this->ticketTools->set(ticket: 1, priority: 'medium'));
 
-        $this->assertSame(2, $data['priority']);
+        $this->assertSame('medium', $data['priority']);
     }
 
     #[Test]
@@ -172,7 +172,7 @@ final class McpToolsTest extends BaseMcpTest
 
         $data = $this->data($this->ticketTools->set(ticket: 1, name: 'renamed'));
 
-        $this->assertSame(3, $data['priority']);
+        $this->assertSame('high', $data['priority']);
         $this->assertSame('renamed', $data['name']);
     }
 
@@ -196,7 +196,7 @@ final class McpToolsTest extends BaseMcpTest
 
         $data = $this->data($this->ticketTools->set(ticket: 1, priority: 'medium'));
 
-        $this->assertSame(2, $data['priority']);
+        $this->assertSame('medium', $data['priority']);
     }
 
     #[Test]
@@ -207,7 +207,7 @@ final class McpToolsTest extends BaseMcpTest
 
         $data = $this->data($this->ticketTools->set(ticket: 1, priority: 'medium'));
 
-        $this->assertSame(2, $data['priority']);
+        $this->assertSame('medium', $data['priority']);
     }
 
     #[Test]
@@ -225,7 +225,7 @@ final class McpToolsTest extends BaseMcpTest
 
         $data = $this->data($this->ticketTools->set(ticket: 1, priority: 'medium'));
 
-        $this->assertSame(2, $data['priority']);
+        $this->assertSame('medium', $data['priority']);
         $this->assertSame('original name', $data['name']);
         $this->assertSame('original description', $data['description']);
         $this->assertSame('original ai description', $data['ai_description']);
